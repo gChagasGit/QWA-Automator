@@ -1,0 +1,30 @@
+# --- Índice Extra para PyTorch CPU ---
+# --extra-index-url https://download.pytorch.org/whl/cpu # --- Índice Extra para PyTorch only CPU ---
+# --extra-index-url https://download.pytorch.org/whl/cu113 # --- Índice Extra para PyTorch CUDA 11.3 ---
+# --extra-index-url https://download.pytorch.org/whl/cu128 # --- Índice Extra para PyTorch CUDA 12.8 ---
+
+# --- Core Deep Learning (Baseado no seu Conda) ---
+# Usamos >= para garantir compatibilidade com CUDA no Docker
+torch>=2.5.1
+torchvision>=0.20.1
+
+# --- Yolo & Treino (Baseado no seu Pip) ---
+ultralytics==8.3.216
+# pytorch-ignite==0.5.3
+
+# --- MLOps & Interface ---
+streamlit
+
+# --- Processamento de Dados & Imagem ---
+pandas==2.3.3
+numpy>=2.0.1
+scikit-image==0.25.2
+Pillow>=11.0.0
+scikit-learn==1.7.2
+scipy>=1.16.0
+
+# --- Utilitários ---
+opencv-python-headless>=4.10.0
+matplotlib>=3.10.0
+tqdm>=4.67.1
+pyyaml>=6.0.2

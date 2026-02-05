@@ -1,0 +1,22 @@
+# Git e Notebooks
+.git/
+**/.ipynb_checkpoints/
+
+# Python Cache (Ignorar em QUALQUER pasta)
+**/__pycache__/
+**/*.pyc
+
+# Pastas Temporárias e de Saída
+temp_masks/
+temp_batch/
+temp_batch_yaml/
+output_results/
+
+# Dados (Importante: isso evita que imagens de teste entrem no build)
+input_images/
+data/
+
+# Ambientes Virtuais (Prevenção caso você crie um no futuro)
+venv/
+env/
+qwa_env/
