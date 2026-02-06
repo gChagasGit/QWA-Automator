@@ -5,7 +5,6 @@ from PIL import Image
 import os
 import sys
 import shutil
-import torch
 import cv2
 
 # --- 1. CONFIGURAÇÃO DE PATHS ---
@@ -13,20 +12,20 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 root_dir = os.path.abspath(os.path.join(current_dir, '../..'))
 sys.path.append(root_dir)
 
-# --- 2. IMPORTS ---
+# --- 2. IMPORTS (Versão ONNX) ---
 try:
-    from model.yolo_unet3p_model import YoloV8_Unet3p
-except ImportError:
-    st.error("Erro Crítico: Não foi possível importar 'model.yolo_unet3p_model'.")
+    # Importa os módulos específicos para ONNX
+    from src.core.inference_onnx import ONNXModelAdapter, run_inference
+    from src.core.metrics import calculate_qwa_metrics
+    from src.core.post_processing import MaskPostProcessor
+    from src.gui.visualization import desenhar_grid_quadrantes
+except ImportError as e:
+    st.error(f"Erro Crítico de Importação: {e}")
+    st.info("Verifique se o arquivo src/core/inference_onnx.py existe e se as dependências estão instaladas.")
     st.stop()
 
-from src.core.metrics import calculate_qwa_metrics
-from src.core.inference import run_inference, LocalModelAdapter
-from src.core.post_processing import MaskPostProcessor
-from src.gui.visualization import desenhar_grid_quadrantes
-
 # --- 3. CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="QWA Automator - Anatomia", layout="wide", page_icon="🔬")
+st.set_page_config(page_title="QWA Automator ONNX", layout="wide", page_icon="⚡")
 
 # --- CSS ---
 st.markdown(
@@ -45,36 +44,32 @@ if not os.path.exists(TEMP_DIR): os.makedirs(TEMP_DIR)
 
 # --- 4. FUNÇÕES DE UTILIDADE ---
 
-def listar_modelos(diretorio, keyword):
+def listar_modelos_onnx(diretorio):
+    """Lista apenas arquivos .onnx na pasta model"""
     if not os.path.exists(diretorio): return []
-    arquivos = [f for f in os.listdir(diretorio) if keyword.lower() in f.lower() and f.endswith(('.pt', '.pth'))]
+    arquivos = [f for f in os.listdir(diretorio) if f.lower().endswith('.onnx')]
     return sorted(arquivos)
 
 @st.cache_resource
-def load_local_model(path_yolo, path_unet):
-    if not path_yolo or not path_unet: return None, "Caminhos inválidos."
+def load_onnx_model(path_model):
+    """Carrega o modelo ONNX e cacheia o adaptador na memória"""
+    if not path_model or not os.path.exists(path_model):
+        return None, "Arquivo do modelo não encontrado."
 
-    if torch.cuda.is_available():
-        print(f"CUDA device: {torch.cuda.get_device_name(0)}")
-        device = 'cuda'
-    else:
-        print("CUDA não disponível. Usando CPU.")
-        device = 'cpu'
-    
-    if not os.path.exists(path_yolo) or not os.path.exists(path_unet): return None, "Pesos não encontrados."
     try:
-        model = YoloV8_Unet3p(
-            n_classes=1, is_ds=False, dummy_input_size=(768, 1024),
-            yolo_model_path=path_yolo, decoder_weights_path=path_unet
-        ).to(device)
-        model.eval()
-        return LocalModelAdapter(model, device), None
+        # O adaptador ONNX gerencia a sessão e providers (CPU/OpenVINO) automaticamente
+        adapter = ONNXModelAdapter(path_model)
+        
+        # Log discreto do provider em uso (CPUExecutionProvider ou OpenVINO/CUDA)
+        providers = adapter.session.get_providers()
+        print(f"Modelo carregado. Engine: {providers[0]}")
+        
+        return adapter, None
     except Exception as e:
-        return None, str(e)
+        return None, f"Erro ao carregar ONNX: {str(e)}"
 
-# --- LÓGICA DE CÁLCULO ---
+# --- LÓGICA DE CÁLCULO (Mantida idêntica para consistência) ---
 def filtrar_vasos(df, apenas_inside):
-    """Filtra o DataFrame baseado na flag Inside (vasos inteiros)."""
     if apenas_inside and 'Inside' in df.columns:
         return df[df['Inside'] == True]
     return df
@@ -82,7 +77,7 @@ def filtrar_vasos(df, apenas_inside):
 def calcular_resumo_imagem(df_vessels, filename, img_area_mm2):
     if df_vessels is None or df_vessels.empty: return None
     n = len(df_vessels)
-    # Porosidade baseada em Pixels (Mask 1024x768)
+    # Porosidade baseada em Pixels (Mask padrão 1024x768)
     porosidade = (df_vessels['Area_px'].sum() / (1024 * 768)) * 100
     return {
         "Arquivo": filename, "Nº Vasos": n, "Freq. (v/mm²)": n / img_area_mm2,
@@ -142,15 +137,22 @@ def agrupar_por_quadrante(df_imagem, img_area_mm2):
 # --- 5. SIDEBAR ---
 with st.sidebar:
     st.header("Configurações")
-    st.subheader("Seleção de Modelo")
-    model_dir = os.path.join(root_dir, "model")
-    opcoes_yolo = listar_modelos(model_dir, "yolo")
-    opcoes_unet = listar_modelos(model_dir, "unet")
     
-    yolo_path = os.path.join(model_dir, st.selectbox("YOLO:", options=opcoes_yolo)) if opcoes_yolo else None
-    unet_path = os.path.join(model_dir, st.selectbox("UNet:", options=opcoes_unet)) if opcoes_unet else None
+    # SELEÇÃO DE MODELO ONNX
+    st.subheader("Modelo de Inferência")
+    model_dir = os.path.join(root_dir, "model")
+    opcoes_onnx = listar_modelos_onnx(model_dir)
+    
+    if opcoes_onnx:
+        model_name = st.selectbox("Selecione o arquivo .onnx:", options=opcoes_onnx)
+        onnx_path = os.path.join(model_dir, model_name)
+    else:
+        st.warning("Nenhum modelo .onnx encontrado na pasta 'model/'.")
+        onnx_path = None
     
     st.divider()
+    
+    # PARÂMETROS
     THRESHOLD_FIXO = 0.5 
     min_area_obj = st.number_input("Área Mínima (px):", value=100)
     
@@ -171,12 +173,11 @@ with st.sidebar:
     st.divider()
     save_masks = st.checkbox("Salvar Máscaras em Disco?", value=False)
     
-    # --- LÓGICA AUTOMÁTICA DE PERSISTÊNCIA ---
     default_out = "host/data/output_results" if os.path.exists("/app/host") else "output_results"
     output_dir_name = st.text_input("Pasta Saída:", value=default_out, help=f"Padrão detectado: {default_out}")
 
 # --- 6. APP PRINCIPAL ---
-st.title("🔬 Relatório de Anatomia Quantitativa")
+st.title("🔬 Relatório de Anatomia (ONNX)")
 
 # Inicializa Estado da Sessão
 if 'results_raw' not in st.session_state: st.session_state['results_raw'] = []
@@ -196,12 +197,18 @@ if uploaded_files and st.button("🚀 Gerar Relatório", type="primary"):
     st.session_state['results_raw'] = []
     st.session_state['uploaded_files_map'] = {f.name: f for f in uploaded_files}
     
-    with st.spinner("Carregando Modelos e Processando..."):
-        adapter, erro = load_local_model(yolo_path, unet_path)
-        if not adapter: st.error(erro); st.stop()
+    with st.spinner("Carregando Modelo ONNX e Processando..."):
+        # CARREGAMENTO DO MODELO
+        adapter, erro = load_onnx_model(onnx_path)
+        
+        if not adapter: 
+            st.error(erro if erro else "Selecione um modelo válido na barra lateral.")
+            st.stop()
         
         post_proc = MaskPostProcessor(threshold=THRESHOLD_FIXO, min_area=min_area_obj)
         final_out_dir = os.path.join(root_dir, output_dir_name)
+        
+        # Cria diretórios de saída se não existirem
         if not os.path.exists(final_out_dir): os.makedirs(final_out_dir)
         if save_masks: os.makedirs(os.path.join(final_out_dir, "masks"), exist_ok=True)
 
@@ -212,6 +219,8 @@ if uploaded_files and st.button("🚀 Gerar Relatório", type="primary"):
                 img_pil = Image.open(file).convert("RGB")
                 orig_w, orig_h = img_pil.size
                 
+                # INFERÊNCIA ONNX
+                # O adapter já sabe lidar com o preprocessamento necessário
                 mask_array = run_inference(adapter, img_pil, post_proc, THRESHOLD_FIXO)
                 
                 temp_path = os.path.join(TEMP_DIR, f"temp_{file.name}.png")
@@ -237,7 +246,7 @@ if uploaded_files and st.button("🚀 Gerar Relatório", type="primary"):
                 st.error(f"Erro em {file.name}: {e}")
             bar.progress((i+1)/len(uploaded_files))
             
-    st.success("Processamento Concluído!")
+    st.success("Processamento ONNX Concluído!")
 
 # --- EXIBIÇÃO DOS RESULTADOS ---
 if st.session_state['results_raw']:
@@ -270,7 +279,7 @@ if st.session_state['results_raw']:
 
     height_global = 600 if len(df_final) > 25 else "content"
 
-    # CORREÇÃO DARK MODE: Adicionado 'color: #000000' para forçar texto preto
+    # CORREÇÃO DARK MODE
     st.dataframe(
         df_final.style.format(precision=2, na_rep="-").apply(
              lambda x: ['background-color: #e6e9ef; color: #000000' if x['Arquivo'] in ['TOTAL', 'MÉDIA'] else '' for i in x], axis=1),
@@ -350,7 +359,7 @@ if st.session_state['results_raw']:
         
         height_table = 600 if len(df_q) > 25 else "content"
         
-        # CORREÇÃO DARK MODE: Adicionado 'color: #000000' para forçar texto preto
+        # CORREÇÃO DARK MODE
         st.dataframe(
             df_q.style.format(precision=2, na_rep="-").apply(
                 lambda x: ['background-color: #e6e9ef; color: #292933' if x['Quadrante'] in ['TOTAL', 'MÉDIA'] else '' for i in x], axis=1),
