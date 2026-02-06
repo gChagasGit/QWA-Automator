@@ -59,8 +59,8 @@ def create_config_path():
     # OBS: O conteúdo abaixo deve ficar encostado na margem esquerda
     # para evitar erros de leitura do YAML.
     default_yaml = """paths:
-  input: "/app/host/data/input_images"
-  output: "/app/host/data/output_results"
+  input: "data/input_images"
+  output: "data/output_results"
   yolo_model: "model/model_yolo_detect.pt"
   unet_model: "model/model_unet3p_segment.pt"
 
