@@ -1,0 +1,27 @@
+name: Sync to Hugging Face Hub
+
+on:
+  push:
+    branches: [main] # O robô liga quando você dá push na branch main
+
+  # Permite rodar manualmente clicando num botão se precisar
+  workflow_dispatch:
+
+jobs:
+  sync-to-hub:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          lfs: true # IMPORTANTE: Garante que os modelos .pt sejam copiados
+
+      - name: Push to hub
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }} # Pega a senha do cofre do GitHub
+        run: |
+          git config --global user.email "chagasgustavo10@gmail.com"
+          git config --global user.name "gChagasGit"
+          git remote add space https://gchagas:$HF_TOKEN@huggingface.co/spaces/gchagas/QWA-Automator-beta
+          git push --force space main
+
