@@ -25,7 +25,7 @@ except ImportError as e:
     st.stop()
 
 # --- 3. CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="QWA Automator ONNX", layout="wide", page_icon="⚡")
+st.set_page_config(page_title="QWA Automator", layout="wide", page_icon="⚡")
 
 # --- CSS ---
 st.markdown(
@@ -66,7 +66,7 @@ def load_onnx_model(path_model):
         
         return adapter, None
     except Exception as e:
-        return None, f"Erro ao carregar ONNX: {str(e)}"
+        return None, f"Erro ao carregar o modelo: {str(e)}"
 
 # --- LÓGICA DE CÁLCULO (Mantida idêntica para consistência) ---
 def filtrar_vasos(df, apenas_inside):
@@ -177,7 +177,7 @@ with st.sidebar:
     output_dir_name = st.text_input("Pasta Saída:", value=default_out, help=f"Padrão detectado: {default_out}")
 
 # --- 6. APP PRINCIPAL ---
-st.title("🔬 Relatório de Anatomia (ONNX)")
+st.title("🔬 Relatório de Anatomia")
 
 # Inicializa Estado da Sessão
 if 'results_raw' not in st.session_state: st.session_state['results_raw'] = []
@@ -197,7 +197,7 @@ if uploaded_files and st.button("🚀 Gerar Relatório", type="primary"):
     st.session_state['results_raw'] = []
     st.session_state['uploaded_files_map'] = {f.name: f for f in uploaded_files}
     
-    with st.spinner("Carregando Modelo ONNX e Processando..."):
+    with st.spinner("Carregando Modelo e Processando..."):
         # CARREGAMENTO DO MODELO
         adapter, erro = load_onnx_model(onnx_path)
         
