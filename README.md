@@ -1,3 +1,13 @@
+---
+title: QWA Automator Beta
+emoji: 🌲
+colorFrom: green
+colorTo: blue
+sdk: docker
+app_port: 8501
+pinned: false
+---
+
 # QWA Automator: Segmentação de Vasos em Microscopia de Madeira
 
 [![Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://streamlit.io)
