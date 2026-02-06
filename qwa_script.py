@@ -112,8 +112,14 @@ def main():
     save_masks = cfg['parameters']['save_masks']
 
     # 2. Setup
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"🚀 Iniciando QWA Batch (YAML) em: {device}, {torch.cuda.get_device_name(torch.cuda.current_device())}")
+    if torch.cuda.is_available():
+        print(f"CUDA device: {torch.cuda.get_device_name(0)}")
+        device = 'cuda'
+    else:
+        print("CUDA não disponível. Usando CPU.")
+        device = 'cpu'
+    
+    print(f"🚀 Iniciando QWA Batch (YAML) em: {device}")
 
     if not os.path.exists(input_dir):
         print(f"❌ Input não encontrado: {input_dir}")

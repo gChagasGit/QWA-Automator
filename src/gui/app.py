@@ -53,8 +53,14 @@ def listar_modelos(diretorio, keyword):
 @st.cache_resource
 def load_local_model(path_yolo, path_unet):
     if not path_yolo or not path_unet: return None, "Caminhos inválidos."
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"CUDA device: {torch.cuda.get_device_name(torch.cuda.current_device())}")
+
+    if torch.cuda.is_available():
+        print(f"CUDA device: {torch.cuda.get_device_name(0)}")
+        device = 'cuda'
+    else:
+        print("CUDA não disponível. Usando CPU.")
+        device = 'cpu'
+    
     if not os.path.exists(path_yolo) or not os.path.exists(path_unet): return None, "Pesos não encontrados."
     try:
         model = YoloV8_Unet3p(
