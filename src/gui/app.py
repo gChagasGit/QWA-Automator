@@ -137,6 +137,7 @@ def agrupar_por_quadrante(df_imagem, img_area_mm2):
 # --- 5. SIDEBAR ---
 with st.sidebar:
     st.header("Configurações")
+<<<<<<< HEAD
     
     # SELEÇÃO DE MODELO ONNX
     st.subheader("Modelo de Inferência")
@@ -155,26 +156,109 @@ with st.sidebar:
     # PARÂMETROS
     THRESHOLD_FIXO = 0.5 
     min_area_obj = st.number_input("Área Mínima (px):", value=100)
+=======
+    
+    # --- SEÇÃO DE MODELOS ---
+    st.subheader("Seleção de Modelo")
+    model_dir = os.path.join(root_dir, "model")
+    
+    # Note que aqui você deve garantir que a função listar_modelos suporte .onnx agora
+    opcoes_onnx = [f for f in os.listdir(model_dir) if f.endswith('.onnx')]
+    
+    onnx_path = os.path.join(model_dir, st.selectbox("Modelo ONNX:", options=opcoes_onnx)) if opcoes_onnx else None
+>>>>>>> 4c72180 (fix: alterações nas dependências e texto do app.py)
     
     st.divider()
+
+    # --- SEÇÃO DE CALIBRAÇÃO ---
+    st.subheader("Calibração de Escala")
     calib_mode = st.radio("Método:", ["Resolução (µm/px)", "Dimensão Real (µm)"])
-    pixel_size_val = None; real_w_val = None; real_h_val = None
+    
+    pixel_size_val = 1.0638  # Valor padrão
     if "Resolução" in calib_mode:
         pixel_size_val = st.number_input("Resolução (µm/px):", value=1.0638, format="%.4f")
     else:
         c1, c2 = st.columns(2)
         real_w_val = c1.number_input("Largura (µm):", value=2748.93)
         real_h_val = c2.number_input("Altura (µm):", value=2059.57)
+        # Cálculo da resolução baseada na largura da imagem (assumindo 1024px de largura padrão do seu pipeline)
+        pixel_size_val = real_w_val / 1024
 
     st.divider()
-    st.subheader("Filtros de Análise")
-    ignorar_bordas = st.checkbox("Excluir vasos cortados (Borda)?", value=False, help="Se marcado, vasos que tocam a borda da imagem (Inside=False) serão ignorados nas estatísticas.")
+
+    # --- SEÇÃO DE FILTROS (MUDANÇA SOLICITADA) ---
+    st.subheader("Filtros de Segmentação")
+    
+    # Input amigável para o pesquisador (em micrometros quadrados)
+    min_area_um2 = st.number_input(
+        "Área Mínima do Vaso (µm²):", 
+        value=150.0, 
+        step=10.0,
+        help="Vasos com área física menor que este valor serão descartados como ruído."
+    )
+
+    # Conversão matemática: Área_px = Área_um2 / (Resolução^2)
+    # Isso garante que o filtro seja consistente mesmo se a resolução da foto mudar.
+    min_area_obj = int(min_area_um2 / (pixel_size_val ** 2))
+    
+    # Feedback visual para o usuário saber o que está acontecendo em pixels
+    st.caption(f"Equivalente técnico: **{min_area_obj} px**")
+
+    THRESHOLD_FIXO = st.slider("Threshold de Confiança:", 0.1, 0.9, 0.5, 0.05)
+    
+    st.divider()
+    st.subheader("Opções de Análise")
+    ignorar_bordas = st.checkbox(
+        "Excluir vasos cortados (Borda)?", 
+        value=False, 
+        help="Se marcado, vasos que tocam a borda da imagem (Inside=False) serão ignorados nas estatísticas."
+    )
 
     st.divider()
     save_masks = st.checkbox("Salvar Máscaras em Disco?", value=False)
     
+<<<<<<< HEAD
+=======
+    # --- PERSISTÊNCIA DE DADOS ---
+>>>>>>> 4c72180 (fix: alterações nas dependências e texto do app.py)
     default_out = "host/data/output_results" if os.path.exists("/app/host") else "output_results"
-    output_dir_name = st.text_input("Pasta Saída:", value=default_out, help=f"Padrão detectado: {default_out}")
+    output_dir_name = st.text_input("Pasta de Saída:", value=default_out)
+
+# # --- 5. SIDEBAR ---
+# with st.sidebar:
+#     st.header("Configurações")
+#     st.subheader("Seleção de Modelo")
+#     model_dir = os.path.join(root_dir, "model")
+#     opcoes_yolo = listar_modelos(model_dir, "yolo")
+#     opcoes_unet = listar_modelos(model_dir, "unet")
+    
+#     yolo_path = os.path.join(model_dir, st.selectbox("YOLO:", options=opcoes_yolo)) if opcoes_yolo else None
+#     unet_path = os.path.join(model_dir, st.selectbox("UNet:", options=opcoes_unet)) if opcoes_unet else None
+    
+#     st.divider()
+#     THRESHOLD_FIXO = 0.5 
+#     min_area_obj = st.number_input("Área Mínima (px):", value=100)
+    
+#     st.divider()
+#     calib_mode = st.radio("Método:", ["Resolução (µm/px)", "Dimensão Real (µm)"])
+#     pixel_size_val = None; real_w_val = None; real_h_val = None
+#     if "Resolução" in calib_mode:
+#         pixel_size_val = st.number_input("Resolução (µm/px):", value=1.0638, format="%.4f")
+#     else:
+#         c1, c2 = st.columns(2)
+#         real_w_val = c1.number_input("Largura (µm):", value=2748.93)
+#         real_h_val = c2.number_input("Altura (µm):", value=2059.57)
+
+#     st.divider()
+#     st.subheader("Filtros de Análise")
+#     ignorar_bordas = st.checkbox("Excluir vasos cortados (Borda)?", value=False, help="Se marcado, vasos que tocam a borda da imagem (Inside=False) serão ignorados nas estatísticas.")
+
+#     st.divider()
+#     save_masks = st.checkbox("Salvar Máscaras em Disco?", value=False)
+    
+#     # --- LÓGICA AUTOMÁTICA DE PERSISTÊNCIA ---
+#     default_out = "host/data/output_results" if os.path.exists("/app/host") else "output_results"
+#     output_dir_name = st.text_input("Pasta Saída:", value=default_out, help=f"Padrão detectado: {default_out}")
 
 # --- 6. APP PRINCIPAL ---
 st.title("🔬 Relatório de Anatomia")

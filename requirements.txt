@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # --- Índice Extra para PyTorch CPU ---
 # --extra-index-url https://download.pytorch.org/whl/cpu # --- Índice Extra para PyTorch only CPU ---
 # --extra-index-url https://download.pytorch.org/whl/cu113 # --- Índice Extra para PyTorch CUDA 11.3 ---
@@ -13,6 +14,8 @@
 
 #=============================================================================================================
 
+=======
+>>>>>>> 4c72180 (fix: alterações nas dependências e texto do app.py)
 # # --- Core Deep Learning ---
 onnxruntime-gpu==1.24.1
 
