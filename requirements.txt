@@ -1,21 +1,3 @@
-<<<<<<< HEAD
-# --- Índice Extra para PyTorch CPU ---
-# --extra-index-url https://download.pytorch.org/whl/cpu # --- Índice Extra para PyTorch only CPU ---
-# --extra-index-url https://download.pytorch.org/whl/cu113 # --- Índice Extra para PyTorch CUDA 11.3 ---
-# --extra-index-url https://download.pytorch.org/whl/cu128 # --- Índice Extra para PyTorch CUDA 12.8 ---
-
-# # --- Core Deep Learning ---
-# # Usamos >= para garantir compatibilidade com CUDA no Docker
-# torch>=2.5.1
-# torchvision>=0.20.1
-
-# # --- Yolo & Treino (Baseado no seu Pip) ---
-# ultralytics==8.3.216
-
-#=============================================================================================================
-
-=======
->>>>>>> 4c72180 (fix: alterações nas dependências e texto do app.py)
 # # --- Core Deep Learning ---
 onnxruntime-gpu==1.24.1
 

@@ -134,7 +134,7 @@ def agrupar_por_quadrante(df_imagem, img_area_mm2):
     df_sum, df_mean = calcular_linhas_resumo(df, label_col_name="Quadrante")
     return pd.concat([df, df_sum, df_mean], ignore_index=True)
 
-# --- 5. SIDEBAR ---
+# --- 5. SIDEBAR COMPLETO ---
 with st.sidebar:
     st.header("Configurações")
     
@@ -147,65 +147,52 @@ with st.sidebar:
         model_name = st.selectbox("Selecione o arquivo .onnx:", options=opcoes_onnx)
         onnx_path = os.path.join(model_dir, model_name)
     else:
-        st.warning("Nenhum modelo .onnx encontrado na pasta 'model/'.")
+        st.warning("Nenhum modelo .onnx encontrado.")
         onnx_path = None
     
     st.divider()
 
-    # --- SEÇÃO DE CALIBRAÇÃO (Necessária para a conversão de área) ---
+    # --- CALIBRAÇÃO DE ESCALA (Simplificada para Resolução) ---
     st.subheader("Calibração de Escala")
-    calib_mode = st.radio("Método:", ["Resolução (µm/px)", "Dimensão Real (µm)"])
+    st.info("Informe a resolução obtida na calibração do seu microscópio.")
     
-    # Inicializa a variável de resolução
-    pixel_size_val = 1.0638 
-    
-    if "Resolução" in calib_mode:
-        pixel_size_val = st.number_input("Resolução (µm/px):", value=1.0638, format="%.4f")
-    else:
-        c1, c2 = st.columns(2)
-        real_w_val = c1.number_input("Largura (µm):", value=2748.93)
-        real_h_val = c2.number_input("Altura (µm):", value=2059.57)
-        # Calcula a resolução baseada na largura da imagem (padrão 1024px)
-        pixel_size_val = real_w_val / 1024
+    # Campo único de entrada para resolução
+    pixel_size_val = st.number_input(
+        "Resolução (µm/px):", 
+        value=1.0638, 
+        format="%.4f",
+        help="Quantidade de micrômetros por pixel na imagem original."
+    )
 
     st.divider()
 
-    # --- SEÇÃO DE FILTROS (MUDANÇA SOLICITADA) ---
+    # --- FILTROS DE ANATOMIA (QWA) ---
     st.subheader("Filtros de Segmentação")
     
-    # 1. Usuário insere a área mínima em micrometros quadrados (unidade biológica)
+    # Entrada amigável para o anatomista (µm²)
     min_area_um2 = st.number_input(
         "Área Mínima do Vaso (µm²):", 
-        value=150.0, 
-        step=10.0,
-        help="Vasos com área física menor que este valor serão descartados como ruído."
+        value=100.0, 
+        step=5.0,
+        help="Vasos com área física menor que esta serão ignorados."
     )
 
-    # 2. Conversão matemática para Pixels: Área_px = Área_um2 / (Resolução^2)
-    # O MaskPostProcessor receberá 'min_area_obj' que agora é em pixels
-    min_area_obj = int(min_area_um2 / (pixel_size_val ** 2))
+    # Conversão robusta para pixels baseada na resolução informada
+    # Area_px = Area_um2 / (Resolução^2)
+    min_area_obj = int(round(min_area_um2 / (pixel_size_val ** 2)))
     
-    # Feedback visual para o usuário
-    st.caption(f"Equivalente técnico: **{min_area_obj} px**")
+    st.caption(f"Equivalente técnico na máscara: **{min_area_obj} px**")
 
-    # Threshold de confiança para o modelo ONNX
     THRESHOLD_FIXO = st.slider("Threshold de Confiança:", 0.1, 0.9, 0.5, 0.05)
     
     st.divider()
     
-    # --- OPÇÕES DE ANÁLISE ---
     st.subheader("Opções de Análise")
-    ignorar_bordas = st.checkbox(
-        "Excluir vasos cortados (Borda)?", 
-        value=False, 
-        help="Se marcado, vasos que tocam a borda da imagem serão ignorados nas estatísticas (Inside=False)."
-    )
-
+    ignorar_bordas = st.checkbox("Excluir vasos cortados (Borda)?", value=False)
     save_masks = st.checkbox("Salvar Máscaras em Disco?", value=False)
     
-    # Define pasta de saída
     default_out = "host/data/output_results" if os.path.exists("/app/host") else "output_results"
-    output_dir_name = st.text_input("Pasta Saída:", value=default_out, help=f"Padrão: {default_out}")
+    output_dir_name = st.text_input("Pasta Saída:", value=default_out)
 
 # --- 6. APP PRINCIPAL ---
 st.title("🔬 Relatório de Anatomia")
@@ -310,7 +297,7 @@ if st.session_state['results_raw']:
 
     height_global = 600 if len(df_final) > 25 else "content"
 
-    # CORREÇÃO DARK MODE
+    # CORREÇÃO DARK MODE: Adicionado 'color: #000000' para forçar texto preto
     st.dataframe(
         df_final.style.format(precision=2, na_rep="-").apply(
              lambda x: ['background-color: #e6e9ef; color: #000000' if x['Arquivo'] in ['TOTAL', 'MÉDIA'] else '' for i in x], axis=1),
@@ -390,7 +377,7 @@ if st.session_state['results_raw']:
         
         height_table = 600 if len(df_q) > 25 else "content"
         
-        # CORREÇÃO DARK MODE
+        # CORREÇÃO DARK MODE: Adicionado 'color: #000000' para forçar texto preto
         st.dataframe(
             df_q.style.format(precision=2, na_rep="-").apply(
                 lambda x: ['background-color: #e6e9ef; color: #292933' if x['Quadrante'] in ['TOTAL', 'MÉDIA'] else '' for i in x], axis=1),

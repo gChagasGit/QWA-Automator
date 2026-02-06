@@ -31,11 +31,11 @@ def desenhar_grid_quadrantes(
     
     # --- CORREÇÃO DA ESCALA ---
     # 1. Quantos pixels tem 1mm na imagem ORIGINAL?
-    lado_px_original = 1000 / pixel_size_um  # ~940 px
+    lado_px_original = 1000 / pixel_size_um  # ~940
     
     # 2. Qual foi o fator de redução da largura (Original -> Máscara)?
     # Ex: 1024 / 2584 = 0.39
-    scale_factor = w_mask / original_w
+    scale_factor =  w_mask / original_w 
     
     # 3. Quantos pixels tem 1mm na MÁSCARA?
     # Ex: 940 * 0.39 = ~366 px
