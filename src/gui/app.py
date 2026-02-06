@@ -138,7 +138,7 @@ def agrupar_por_quadrante(df_imagem, img_area_mm2):
 with st.sidebar:
     st.header("Configurações")
     
-    # SELEÇÃO DE MODELO ONNX
+    # --- SEÇÃO DE MODELOS ---
     st.subheader("Modelo de Inferência")
     model_dir = os.path.join(root_dir, "model")
     opcoes_onnx = listar_modelos_onnx(model_dir)
@@ -151,30 +151,61 @@ with st.sidebar:
         onnx_path = None
     
     st.divider()
-    
-    # PARÂMETROS
-    THRESHOLD_FIXO = 0.5 
-    min_area_obj = st.number_input("Área Mínima (px):", value=100)
-    
-    st.divider()
+
+    # --- SEÇÃO DE CALIBRAÇÃO (Necessária para a conversão de área) ---
+    st.subheader("Calibração de Escala")
     calib_mode = st.radio("Método:", ["Resolução (µm/px)", "Dimensão Real (µm)"])
-    pixel_size_val = None; real_w_val = None; real_h_val = None
+    
+    # Inicializa a variável de resolução
+    pixel_size_val = 1.0638 
+    
     if "Resolução" in calib_mode:
         pixel_size_val = st.number_input("Resolução (µm/px):", value=1.0638, format="%.4f")
     else:
         c1, c2 = st.columns(2)
         real_w_val = c1.number_input("Largura (µm):", value=2748.93)
         real_h_val = c2.number_input("Altura (µm):", value=2059.57)
+        # Calcula a resolução baseada na largura da imagem (padrão 1024px)
+        pixel_size_val = real_w_val / 1024
 
     st.divider()
-    st.subheader("Filtros de Análise")
-    ignorar_bordas = st.checkbox("Excluir vasos cortados (Borda)?", value=False, help="Se marcado, vasos que tocam a borda da imagem (Inside=False) serão ignorados nas estatísticas.")
 
+    # --- SEÇÃO DE FILTROS (MUDANÇA SOLICITADA) ---
+    st.subheader("Filtros de Segmentação")
+    
+    # 1. Usuário insere a área mínima em micrometros quadrados (unidade biológica)
+    min_area_um2 = st.number_input(
+        "Área Mínima do Vaso (µm²):", 
+        value=150.0, 
+        step=10.0,
+        help="Vasos com área física menor que este valor serão descartados como ruído."
+    )
+
+    # 2. Conversão matemática para Pixels: Área_px = Área_um2 / (Resolução^2)
+    # O MaskPostProcessor receberá 'min_area_obj' que agora é em pixels
+    min_area_obj = int(min_area_um2 / (pixel_size_val ** 2))
+    
+    # Feedback visual para o usuário
+    st.caption(f"Equivalente técnico: **{min_area_obj} px**")
+
+    # Threshold de confiança para o modelo ONNX
+    THRESHOLD_FIXO = st.slider("Threshold de Confiança:", 0.1, 0.9, 0.5, 0.05)
+    
     st.divider()
+    
+    # --- OPÇÕES DE ANÁLISE ---
+    st.subheader("Opções de Análise")
+    ignorar_bordas = st.checkbox(
+        "Excluir vasos cortados (Borda)?", 
+        value=False, 
+        help="Se marcado, vasos que tocam a borda da imagem serão ignorados nas estatísticas (Inside=False)."
+    )
+
     save_masks = st.checkbox("Salvar Máscaras em Disco?", value=False)
     
+    # Define pasta de saída
     default_out = "host/data/output_results" if os.path.exists("/app/host") else "output_results"
-    output_dir_name = st.text_input("Pasta Saída:", value=default_out, help=f"Padrão detectado: {default_out}")
+    output_dir_name = st.text_input("Pasta Saída:", value=default_out, help=f"Padrão: {default_out}")
 
 # --- 6. APP PRINCIPAL ---
 st.title("🔬 Relatório de Anatomia")
