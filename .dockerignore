@@ -1,5 +1,6 @@
 # Git e Notebooks
 .git/
+.github/
 **/.ipynb_checkpoints/
 
 # Python Cache (Ignorar em QUALQUER pasta)
