@@ -14,7 +14,7 @@ print(f"🔍 Diretório atual: {os.getcwd()}")
 
 # Tenta importar os módulos do projeto
 try:
-    from src.core.metrics import calculate_qwa_metrics
+    from src.core.metrics import calculate_qwa_metrics, calculate_area_scale_factor
     # Importa o adaptador ONNX específico
     from src.core.inference_onnx import ONNXModelAdapter, run_inference
     from src.core.post_processing import MaskPostProcessor
@@ -114,13 +114,16 @@ def main():
         onnx_path = cfg['paths']['onnx_model']
 
         resolution = cfg['parameters'].get('resolution_um_px', 1.0638)
-        min_area = cfg['parameters'].get('min_area_px', 100)
+        min_area_um = cfg['parameters'].get('min_area_um', 1000)
         threshold = cfg['parameters'].get('threshold', 0.5)
         ignore_border = cfg['parameters'].get('ignore_border', False)
         save_masks = cfg['parameters'].get('save_masks', False)
     except KeyError as e:
         print(f"❌ Campo obrigatório faltando no YAML: {e}")
         sys.exit(1)
+        
+    # Cálculo do min_area_obj em pixels para o MaskPostProcessor.
+    min_area_obj = int(round(min_area_um / (resolution ** 2)))
 
     # 2. Inicializar Modelo
     print("🚀 Carregando modelo ONNX...")
@@ -140,9 +143,6 @@ def main():
     root_dir = os.getcwd()
     temp_dir = os.path.join(root_dir, "temp_batch")
     os.makedirs(temp_dir, exist_ok=True)
-
-    # 3. Execução em Batch
-    post_proc = MaskPostProcessor(threshold=threshold, min_area=min_area)
     
     exts = ('.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff')
     files = sorted([f for f in os.listdir(input_dir) if f.lower().endswith(exts)])
@@ -166,8 +166,15 @@ def main():
             img_pil = Image.open(file_path).convert("RGB")
             orig_w, orig_h = img_pil.size
 
-            # INFERÊNCIA (O Adapter ONNX deve cuidar do pré-processamento/resize interno)
-            mask_array = run_inference(adapter, img_pil, post_proc, threshold)
+            # Cálculo do fator de escala e min_area dinâmico
+            fator_escala = calculate_area_scale_factor(orig_w, orig_h)
+            min_area_scaled = int(round((1/fator_escala) * min_area_obj))
+            print(f"   -> {filename}: Fator Escala = {fator_escala:.3f}, Min Area = {min_area_scaled} px")
+            
+            # Processador atualizado (Post-processing com regionprops)
+            post_proc = MaskPostProcessor(threshold=threshold, min_area=min_area_scaled)
+            
+            mask_array = run_inference(adapter, img_pil, post_proc)
 
             # Salvar máscara temporária para cálculo de métricas (reaproveitando lógica existente)
             temp_path = os.path.join(temp_dir, f"temp_{filename}.png")

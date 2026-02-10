@@ -1,11 +1,10 @@
 paths:
-  input: "/app/host/data/input_images"   # Caminho DENTRO do container
-  output: "/app/host/data/output_results" # Caminho DENTRO do container
-  yolo_model: "model/model_yolo_detect.pt"
-  unet_model: "model/model_unet3p_segment.pt"
+  input: "data/input_images"   # Caminho DENTRO do container
+  output: "data/output_results" # Caminho DENTRO do container
+  onnx_model: "model/model_wood_vessel_segmenter.onnx"
 parameters:
   resolution_um_px: 1.0638
-  min_area_px: 100
+  min_area_px: 3000
   threshold: 0.5
   ignore_border: false
   save_masks: true

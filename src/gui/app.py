@@ -248,7 +248,7 @@ if uploaded_files:
                     # Processador atualizado (Post-processing com regionprops)
                     post_proc = MaskPostProcessor(threshold=THRESHOLD_FIXO, min_area=min_area_scaled)
                     
-                    mask_array = run_inference(adapter, img_pil, post_proc, min_area=min_area_scaled)
+                    mask_array = run_inference(adapter, img_pil, post_proc)
                     
                     temp_path = os.path.join(TEMP_DIR, f"temp_{file.name}.png")
                     Image.fromarray(mask_array).save(temp_path)
@@ -386,7 +386,7 @@ if st.session_state['processado']:
                     )
                     
                     with col_vis2:
-                        st.image(mask_viz, caption="Segmentação + Quadrantes (1mm²)", width="stretch")
+                        st.image(mask_viz, caption="Segmentação + Quadrantes (1mm²)\n1 - Vermelho | 2 - Verde | 3 - Azul | 4 - Laranja", width="stretch")
 
             st.subheader(f"📊 Estatísticas por Quadrante: {selected_file}")
             

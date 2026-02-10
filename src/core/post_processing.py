@@ -115,16 +115,14 @@ class MaskPostProcessor:
 
         return mask_final
 
-    def process(self, mask_prob_numpy, min_area=None):
+    def process(self, mask_prob_numpy):
         """
         Método de instância para ser chamado pelo inference.py.
-        Corrigido erro de digitação de 'self.min_are' para 'self.min_area'.
         """
-        area_to_use = min_area if min_area is not None else self.min_area
-        
+    
         return MaskPostProcessor.refine(
             mask_prob_numpy, 
             mask_prob_numpy.shape, 
             self.threshold, 
-            area_to_use
+            self.min_area
         )

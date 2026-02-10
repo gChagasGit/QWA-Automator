@@ -62,7 +62,7 @@ def run_inference(adapter, pil_image, post_processor=None, min_area=100, thresho
     
     # Pós-processamento (Morfologia e Watershed)
     if post_processor:
-        mask_final = post_processor.process(prob_map_2d, min_area=min_area)
+        mask_final = post_processor.process(prob_map_2d)
     else:
         # Fallback de binarização simples
         mask_final = (prob_map_2d > threshold).astype(np.uint8) * 255
