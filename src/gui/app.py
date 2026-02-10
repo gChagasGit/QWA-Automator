@@ -6,6 +6,7 @@ import os
 import sys
 import shutil
 import cv2
+import io
 
 # --- 1. CONFIGURAÇÃO DE PATHS ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -25,11 +26,20 @@ except ImportError as e:
 # --- 3. CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="QWA Automator", layout="wide", page_icon="⚡")
 
+# --- CSS ---
+st.markdown(
+    """
+    <style>
+    [data-testid="stSidebar"] { min-width: 25%; max-width: 25%; }
+    .block-container { padding-top: 1.5rem; padding-bottom: 0rem; margin-top: 0rem; }
+    h1 { padding-top: 0rem; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 TEMP_DIR = os.path.join(root_dir, "temp_masks")
 if not os.path.exists(TEMP_DIR): os.makedirs(TEMP_DIR)
-
-# --- 3. CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="QWA Automator", layout="wide", page_icon="⚡")
 
 # --- 4. FUNÇÕES DE UTILIDADE ---
 
@@ -95,19 +105,19 @@ def agrupar_por_quadrante(df_imagem, img_area_mm2):
     dfs_to_concat = [d.dropna(axis=1, how='all') for d in [df, df_sum, df_mean] if not d.empty and not d.isna().all().all()]
     return pd.concat(dfs_to_concat, ignore_index=True).convert_dtypes() if dfs_to_concat else df
 
+st.header("📂 Entrada de Dados")
+
+uploaded_files = st.file_uploader(
+    "Selecione a pasta de imagens", 
+    accept_multiple_files="directory",
+    type=["jpg", "jpeg", "png", "tif", "tiff"]
+)
+
+if uploaded_files:
+    st.success(f"✅ {len(uploaded_files)} imagens carregadas.")
+
 # --- 5. SIDEBAR: CONFIGURAÇÕES E ENTRADA ---
 with st.sidebar:
-    st.header("📂 Entrada de Dados")
-    input_folder = st.text_input("Caminho da pasta no servidor:", value="data/input_images")
-    input_folder = os.path.join(root_dir, input_folder)
-    
-    valid_exts = ('.jpg', '.jpeg', '.png', '.tif', '.tiff')
-    files_to_process = []
-    if os.path.exists(input_folder):
-        files_to_process = [f for f in os.listdir(input_folder) if f.lower().endswith(valid_exts)]
-        if files_to_process: st.success(f"✅ {len(files_to_process)} imagens encontradas.")
-    
-    st.divider()
     st.header("⚙️ Calibração")
     pixel_size_val = st.number_input("Resolução (µm/pixel):", min_value=0.01, value=1.0638, format="%.4f")
     min_area_um2 = st.number_input("Área Mínima (µm²):", value=1000.0, step=100.0)
@@ -126,25 +136,30 @@ for key in ['results_raw', 'uploaded_files_map', 'pixel_size_map', 'processado']
         st.session_state[key] = [] if key == 'results_raw' else ({} if 'map' in key else False)
 
 # --- 7. PROCESSAMENTO ---
-if st.button("🚀 Gerar Relatório", width="content", type="primary"):
-    if not files_to_process:
+if st.button("🚀 Gerar Relatório", width="stretch", type="primary"):
+    if not uploaded_files:
         st.error("Nenhuma imagem para processar.")
     else:
         if os.path.exists(TEMP_DIR): shutil.rmtree(TEMP_DIR); os.makedirs(TEMP_DIR)
         st.session_state['results_raw'] = []
+        st.session_state['uploaded_files_map'] = {} 
         
         with st.spinner("Processando..."):
             adapter, erro = load_onnx_model(onnx_path)
             if not adapter: st.error(erro); st.stop()
             
             bar = st.progress(0)
-            for i, filename in enumerate(files_to_process):
-                full_path = os.path.join(input_folder, filename)
+            for i, file in enumerate(uploaded_files):
+                # Extrai apenas o nome do arquivo (ex: '6.jpeg') e ignora o caminho da pasta
+                filename = os.path.basename(file.name) 
                 try:
-                    img_pil = Image.open(full_path).convert("RGB")
+                    # Garantimos que lemos o buffer do início
+                    file.seek(0)
+                    file_bytes = file.read()
+                    img_pil = Image.open(io.BytesIO(file_bytes)).convert("RGB")
+                    
                     orig_w, orig_h = img_pil.size
                     
-                    # Escala e Min_Area
                     fator_escala = calculate_area_scale_factor(orig_w, orig_h)
                     min_area_scaled = int(round((1/fator_escala) * (min_area_um2 / (pixel_size_val**2))))
                     
@@ -159,27 +174,35 @@ if st.button("🚀 Gerar Relatório", width="content", type="primary"):
                         df_img.insert(0, 'Arquivo', filename)
                         df_img['Img_Area_mm2'] = ((orig_w * orig_h) * (pixel_size_val ** 2)) / 1_000_000.0
                         st.session_state['results_raw'].append(df_img)
-                        st.session_state['uploaded_files_map'][filename] = full_path
+                        st.session_state['uploaded_files_map'][filename] = file
                         st.session_state['pixel_size_map'][filename] = pixel_size_val
                 except Exception as e:
                     st.error(f"Erro em {filename}: {e}")
-                bar.progress((i+1)/len(files_to_process))
+                bar.progress((i+1)/len(uploaded_files))
         
         st.session_state['processado'] = True
         del adapter
         st.rerun()
 
-# --- 8. EXIBIÇÃO ---
+# --- EXIBIÇÃO DOS RESULTADOS ---
 if st.session_state['processado']:
     summary_list = []
     for df_raw in st.session_state['results_raw']:
-        df_filt = filtrar_vasos(df_raw, ignorar_bordas)
-        if not df_filt.empty:
-            stats = calcular_resumo_imagem(df_filt, df_raw['Arquivo'].iloc[0], df_raw['Img_Area_mm2'].iloc[0])
+        df_filtered = filtrar_vasos(df_raw, ignorar_bordas)
+        if not df_filtered.empty:
+            filename = df_raw['Arquivo'].iloc[0]
+            area_mm2 = df_raw['Img_Area_mm2'].iloc[0]
+            stats = calcular_resumo_imagem(df_filtered, filename, area_mm2)
             if stats: summary_list.append(stats)
     
     if not summary_list:
-        st.warning("⚠️ Nenhum vaso detectado.")
+        st.warning("⚠️ **Nenhum vaso foi detectado nas imagens processadas.**")
+        st.info("""
+            **Sugestões para ajuste:**
+            1. **Revise a Imagem:** Verifique se a qualidade ou o contraste da captura original permite a identificação dos vasos.
+            2. **Ajuste o Filtro:** A 'Área Mínima (µm²)' pode estar muito alta, excluindo todos os vasos detectados.
+            3. **Troque o Modelo:** O modelo de IA selecionado pode não ser o mais adequado para este tipo específico de madeira.
+        """)
     else:
         df_summary = pd.DataFrame(summary_list)
         st.header("📋 Resumo Global")
@@ -188,7 +211,6 @@ if st.session_state['processado']:
         dfs = [d.dropna(axis=1, how='all') for d in [df_base, df_s, df_m] if not d.empty]
         
         df_final = pd.concat(dfs, ignore_index=True).convert_dtypes()
-        
         height_global = 600 if len(df_final) > 25 else "content"
         
         st.dataframe(
@@ -208,104 +230,66 @@ if st.session_state['processado']:
             df_raw_sel = [d for d in st.session_state['results_raw'] if d['Arquivo'].iloc[0] == selected_file][0]
             df_filt_sel = filtrar_vasos(df_raw_sel, ignorar_bordas)            
             
-            # Injeção de CSS para adicionar padding e bordas arredondadas nas imagens
             st.markdown("""
                 <style>
-                .stImage > img {
-                    padding: 10px;
-                    background-color: #f0f2f6;
-                    border-radius: 10px;
-                }
+                .stImage > img { padding: 10px; background-color: #f0f2f6; border-radius: 10px; }
                 </style>
                 """, unsafe_allow_html=True)
 
             if exibir_visualizacao:
-                # Adicionamos 'gap' para criar o espaçamento entre as colunas
                 col1, col2 = st.columns(2, gap="large")
-                
-                # Resolução de preview (Largura máxima)
                 VIEW_WIDTH = 512 
                 
                 with col1:
-                    img_full = Image.open(st.session_state['uploaded_files_map'][selected_file])
-                    # O PIL resize com o cálculo de aspect ratio evita a distorção inicial
+                    file_ref = st.session_state['uploaded_files_map'][selected_file]
+                    file_ref.seek(0) # Volta para o início do arquivo
+                    img_full = Image.open(file_ref).convert("RGB")
                     aspect = img_full.height / img_full.width
                     img_resized = img_full.resize((VIEW_WIDTH, int(VIEW_WIDTH * aspect)), resample=Image.LANCZOS)
-                    
                     st.image(img_resized, caption=f"Original: {selected_file}", width="stretch")
                     
                 with col2:
-                    # Carregamento da máscara original
                     mask_path = os.path.join(TEMP_DIR, f"temp_{selected_file}.png")
                     mask_cv = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
-                    
-                    # Gera o grid na resolução original para manter a precisão das linhas
                     mask_viz = desenhar_grid_quadrantes(
-                        mask_cv, 
-                        st.session_state['pixel_size_map'][selected_file], 
-                        img_full.size[0], 
-                        df_filt_sel
+                        mask_cv, st.session_state['pixel_size_map'][selected_file], 
+                        img_full.size[0], df_filt_sel
                     )
-                    
-                    # Redimensiona a visualização final para a largura de preview
                     mask_resized = cv2.resize(mask_viz, (VIEW_WIDTH, int(VIEW_WIDTH * aspect)), interpolation=cv2.INTER_AREA)
-                    
                     st.image(mask_resized, caption="Segmentação + Quadrantes (1mm²)", width="stretch")
                     st.caption("**Quadrantes:** :blue[1-Azul] | :green[2-Verde] | :red[3-Vermelho] | :orange[4-Laranja]")
   
             st.subheader("📊 Estatísticas por Quadrante")
             df_q = agrupar_por_quadrante(df_filt_sel, df_raw_sel['Img_Area_mm2'].iloc[0])
-
             st.dataframe(
                 df_q.style.format(precision=2, na_rep="-").apply(
                     lambda x: ['background-color: #e6e9ef; color: #292933' if x['Quadrante'] in ['TOTAL', 'MÉDIA'] else '' for i in x], axis=1),
-                width="stretch", 
-                hide_index=True) 
+                width="stretch", hide_index=True) 
 
-            # --- SEÇÃO DE DOWNLOADS (REINTEGRADA) ---
+            # --- DOWNLOADS ---
             st.divider()
-            
-            # Define e cria o diretório de saída
             final_out_dir = os.path.join(root_dir, "data/output_results")
-            if not os.path.exists(final_out_dir): 
-                os.makedirs(final_out_dir)
+            if not os.path.exists(final_out_dir): os.makedirs(final_out_dir)
             
-            # 1. Gerar e Salvar Resumo Anatômico
             csv_sum = os.path.join(final_out_dir, "resumo_anatomico.csv")
             df_summary.to_csv(csv_sum, sep=';', encoding='utf-8-sig', index=False)
             
-            # 2. Gerar e Salvar Dados Brutos (Todos os vasos de todas as imagens)
             df_all_raw = pd.concat(st.session_state['results_raw'], ignore_index=True)
-            # Limpeza de colunas desnecessárias para o CSV final
-            if "Imagem" in df_all_raw.columns:
-                df_all_raw.drop(columns=["Imagem"], inplace=True)
+            if "Imagem" in df_all_raw.columns: df_all_raw.drop(columns=["Imagem"], inplace=True)
                 
             csv_raw = os.path.join(final_out_dir, "dados_brutos_vasos.csv")
             df_all_raw.to_csv(csv_raw, sep=';', encoding='utf-8-sig', index=False)
 
-            # Interface de botões de download
-            col_dl1, col_spacer, col_dl2 = st.columns([2, 4, 2])
-            with col_dl1:
+            c_dl1, c_spacer, c_dl2 = st.columns([2, 4, 2])
+            with c_dl1:
                 with open(csv_sum, "rb") as f: 
-                    st.download_button(
-                        label="📥 Baixar Resumo (CSV)",
-                        data=f,
-                        file_name="resumo_anatomico.csv",
-                        mime="text/csv",
-                        width="stretch"
-                    )
-            with col_dl2:
+                    st.download_button("📥 Baixar Resumo (CSV)", f, "resumo_anatomico.csv", width="stretch")
+            with c_dl2:
                 with open(csv_raw, "rb") as f: 
-                    st.download_button(
-                        label="📥 Dados Brutos (Completo)",
-                        data=f,
-                        file_name="dados_brutos_vasos.csv",
-                        mime="text/csv",
-                        width="stretch"
-                    )
-                    
+                    st.download_button("📥 Dados Brutos (Completo)", f, "dados_brutos_vasos.csv", width="stretch")
 
-elif files_to_process:
+# CORREÇÃO DAS VERIFICAÇÕES FINAIS:
+elif uploaded_files: # <-- Mudança de files_to_process para uploaded_files
     st.info("Clique em 'Gerar Relatório' para iniciar.")
 else:
     st.info("Faça upload das imagens para começar.")
