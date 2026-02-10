@@ -206,18 +206,52 @@ if st.session_state['processado']:
             exibir_visualizacao = st.checkbox("📸 Exibir Imagem e Máscara (Segmentação)", value=False)
             
             df_raw_sel = [d for d in st.session_state['results_raw'] if d['Arquivo'].iloc[0] == selected_file][0]
-            df_filt_sel = filtrar_vasos(df_raw_sel, ignorar_bordas)
+            df_filt_sel = filtrar_vasos(df_raw_sel, ignorar_bordas)            
             
+            # Injeção de CSS para adicionar padding e bordas arredondadas nas imagens
+            st.markdown("""
+                <style>
+                .stImage > img {
+                    padding: 10px;
+                    background-color: #f0f2f6;
+                    border-radius: 10px;
+                }
+                </style>
+                """, unsafe_allow_html=True)
+
             if exibir_visualizacao:
-                col1, col2 = st.columns(2)
+                # Adicionamos 'gap' para criar o espaçamento entre as colunas
+                col1, col2 = st.columns(2, gap="large")
+                
+                # Resolução de preview (Largura máxima)
+                VIEW_WIDTH = 512 
                 
                 with col1:
-                    st.image(Image.open(st.session_state['uploaded_files_map'][selected_file]), caption=f"Original: {selected_file}")
+                    img_full = Image.open(st.session_state['uploaded_files_map'][selected_file])
+                    # O PIL resize com o cálculo de aspect ratio evita a distorção inicial
+                    aspect = img_full.height / img_full.width
+                    img_resized = img_full.resize((VIEW_WIDTH, int(VIEW_WIDTH * aspect)), resample=Image.LANCZOS)
+                    
+                    st.image(img_resized, caption=f"Original: {selected_file}", width="stretch")
+                    
                 with col2:
-                    mask_cv = cv2.imread(os.path.join(TEMP_DIR, f"temp_{selected_file}.png"), cv2.IMREAD_GRAYSCALE)
-                    mask_viz = desenhar_grid_quadrantes(mask_cv, st.session_state['pixel_size_map'][selected_file], Image.open(st.session_state['uploaded_files_map'][selected_file]).size[0], df_filt_sel)
-                    st.image(mask_viz, caption="Segmentação + Quadrantes (1mm²)")
-                    st.caption("**Quadrantes:** :blue[1 - Azul] | :green[2 - Verde] | :red[3 - Vermelho] | :orange[4 - Laranja]")
+                    # Carregamento da máscara original
+                    mask_path = os.path.join(TEMP_DIR, f"temp_{selected_file}.png")
+                    mask_cv = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+                    
+                    # Gera o grid na resolução original para manter a precisão das linhas
+                    mask_viz = desenhar_grid_quadrantes(
+                        mask_cv, 
+                        st.session_state['pixel_size_map'][selected_file], 
+                        img_full.size[0], 
+                        df_filt_sel
+                    )
+                    
+                    # Redimensiona a visualização final para a largura de preview
+                    mask_resized = cv2.resize(mask_viz, (VIEW_WIDTH, int(VIEW_WIDTH * aspect)), interpolation=cv2.INTER_AREA)
+                    
+                    st.image(mask_resized, caption="Segmentação + Quadrantes (1mm²)", width="stretch")
+                    st.caption("**Quadrantes:** :blue[1-Azul] | :green[2-Verde] | :red[3-Vermelho] | :orange[4-Laranja]")
   
             st.subheader("📊 Estatísticas por Quadrante")
             df_q = agrupar_por_quadrante(df_filt_sel, df_raw_sel['Img_Area_mm2'].iloc[0])
