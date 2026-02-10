@@ -16,7 +16,7 @@ sys.path.append(root_dir)
 try:
     # Importa os módulos específicos para ONNX
     from src.core.inference_onnx import ONNXModelAdapter, run_inference
-    from src.core.metrics import calculate_qwa_metrics
+    from src.core.metrics import calculate_qwa_metrics, calculate_area_scale_factor
     from src.core.post_processing import MaskPostProcessor
     from src.gui.visualization import desenhar_grid_quadrantes
 except ImportError as e:
@@ -130,9 +130,19 @@ def agrupar_por_quadrante(df_imagem, img_area_mm2):
         else:
             stats = {"Quadrante": str(q), "Nº Vasos": 0, "Freq. (v/mm²)": 0.0, "Média do Ø Maior": 0.0, "Ø Maior Std": 0.0, "Média do Ø Menor": 0.0, "Ø Menor Std": 0.0, "Área Média": 0.0, "Área Std": 0.0, "Porosidade (%)": 0.0}
         linhas.append(stats)
+        
     df = pd.DataFrame(linhas)
     df_sum, df_mean = calcular_linhas_resumo(df, label_col_name="Quadrante")
-    return pd.concat([df, df_sum, df_mean], ignore_index=True)
+    
+    # Filtra DataFrames: remove os que estão vazios ou que possuem apenas NAs
+    dfs_to_concat = [
+        d.dropna(axis=1, how='all') for d in [df, df_sum, df_mean] 
+        if not d.empty and not d.isna().all().all()
+    ]
+    
+    if dfs_to_concat:
+        return pd.concat(dfs_to_concat, ignore_index=True).convert_dtypes()
+    return df
 
 # --- 5. SIDEBAR COMPLETO ---
 with st.sidebar:
@@ -144,24 +154,23 @@ with st.sidebar:
     opcoes_onnx = listar_modelos_onnx(model_dir)
     
     if opcoes_onnx:
-        model_name = st.selectbox("Selecione o arquivo .onnx:", options=opcoes_onnx)
+        model_name = st.selectbox("Selecione o modelo de IA", options=opcoes_onnx)
         onnx_path = os.path.join(model_dir, model_name)
     else:
-        st.warning("Nenhum modelo .onnx encontrado.")
+        st.warning("Nenhum modelo de IA encontrado.")
         onnx_path = None
     
     st.divider()
 
-    # --- CALIBRAÇÃO DE ESCALA (Simplificada para Resolução) ---
+    # --- CALIBRAÇÃO DE ESCALA ---
     st.subheader("Calibração de Escala")
-    st.info("Informe a resolução obtida na calibração do seu microscópio.")
+    st.info("Informe a resolução (µm/px) da imagem original.")
     
-    # Campo único de entrada para resolução
     pixel_size_val = st.number_input(
         "Resolução (µm/px):", 
         value=1.0638, 
         format="%.4f",
-        help="Quantidade de micrômetros por pixel na imagem original."
+        help="Quantidade de micrômetros por pixel na captura original do microscópio."
     )
 
     st.divider()
@@ -169,223 +178,227 @@ with st.sidebar:
     # --- FILTROS DE ANATOMIA (QWA) ---
     st.subheader("Filtros de Segmentação")
     
-    # Entrada amigável para o anatomista (µm²)
+    # Entrada amigável para o anatomista em micrometros quadrados
     min_area_um2 = st.number_input(
         "Área Mínima do Vaso (µm²):", 
-        value=100.0, 
-        step=5.0,
-        help="Vasos com área física menor que esta serão ignorados."
+        value=1000.0, 
+        step=100.0,
+        help="Vasos com área física menor que esta serão ignorados pelo processador."
     )
 
-    # Conversão robusta para pixels baseada na resolução informada
-    # Area_px = Area_um2 / (Resolução^2)
+    # Cálculo do min_area_obj em pixels para o MaskPostProcessor.
     min_area_obj = int(round(min_area_um2 / (pixel_size_val ** 2)))
     
-    st.caption(f"Equivalente técnico na máscara: **{min_area_obj} px**")
+    # REMOVIDO: Equivalente técnico em pixels (conforme solicitado)
 
     THRESHOLD_FIXO = st.slider("Threshold de Confiança:", 0.1, 0.9, 0.5, 0.05)
     
     st.divider()
     
     st.subheader("Opções de Análise")
-    ignorar_bordas = st.checkbox("Excluir vasos cortados (Borda)?", value=False)
+    ignorar_bordas = st.checkbox("Excluir vasos cortados?", value=False)
     save_masks = st.checkbox("Salvar Máscaras em Disco?", value=False)
     
     default_out = "host/data/output_results" if os.path.exists("/app/host") else "output_results"
     output_dir_name = st.text_input("Pasta Saída:", value=default_out)
-
+    
 # --- 6. APP PRINCIPAL ---
 st.title("🔬 Relatório de Anatomia")
 
-# Inicializa Estado da Sessão
-if 'results_raw' not in st.session_state: st.session_state['results_raw'] = []
-if 'uploaded_files_map' not in st.session_state: st.session_state['uploaded_files_map'] = {}
-if 'pixel_size_map' not in st.session_state: st.session_state['pixel_size_map'] = {}
+# Inicializa TODAS as chaves de estado necessárias no início
+if 'results_raw' not in st.session_state: 
+    st.session_state['results_raw'] = []
+if 'uploaded_files_map' not in st.session_state: 
+    st.session_state['uploaded_files_map'] = {}
+if 'pixel_size_map' not in st.session_state: 
+    st.session_state['pixel_size_map'] = {}
+if 'processado' not in st.session_state: 
+    st.session_state['processado'] = False
 
 uploaded_files = st.file_uploader("Selecione as imagens:", accept_multiple_files=True)
 
 # BOTÃO DE PROCESSAMENTO
-if uploaded_files and st.button("🚀 Gerar Relatório", type="primary"):
-    
-    # LIMPEZA INICIAL
-    if os.path.exists(TEMP_DIR):
-        shutil.rmtree(TEMP_DIR)
-        os.makedirs(TEMP_DIR)
+if uploaded_files:
+    if st.button("🚀 Gerar Relatório", type="primary"):
+        # Limpeza e reinicialização para novo processamento
+        if os.path.exists(TEMP_DIR):
+            shutil.rmtree(TEMP_DIR)
+            os.makedirs(TEMP_DIR)
+            
+        st.session_state['results_raw'] = []
+        st.session_state['uploaded_files_map'] = {f.name: f for f in uploaded_files}
+        st.session_state['processado'] = False # Reseta até terminar
         
-    st.session_state['results_raw'] = []
-    st.session_state['uploaded_files_map'] = {f.name: f for f in uploaded_files}
-    
-    with st.spinner("Carregando Modelo e Processando..."):
-        # CARREGAMENTO DO MODELO
-        adapter, erro = load_onnx_model(onnx_path)
-        
-        if not adapter: 
-            st.error(erro if erro else "Selecione um modelo válido na barra lateral.")
-            st.stop()
-        
-        post_proc = MaskPostProcessor(threshold=THRESHOLD_FIXO, min_area=min_area_obj)
-        final_out_dir = os.path.join(root_dir, output_dir_name)
-        
-        # Cria diretórios de saída se não existirem
-        if not os.path.exists(final_out_dir): os.makedirs(final_out_dir)
-        if save_masks: os.makedirs(os.path.join(final_out_dir, "masks"), exist_ok=True)
-
-        bar = st.progress(0)
-        
-        for i, file in enumerate(uploaded_files):
-            try:
-                img_pil = Image.open(file).convert("RGB")
-                orig_w, orig_h = img_pil.size
-                
-                # INFERÊNCIA ONNX
-                # O adapter já sabe lidar com o preprocessamento necessário
-                mask_array = run_inference(adapter, img_pil, post_proc, THRESHOLD_FIXO)
-                
-                temp_path = os.path.join(TEMP_DIR, f"temp_{file.name}.png")
-                Image.fromarray(mask_array).save(temp_path)
-                
-                curr_px = pixel_size_val
-                if not curr_px and real_w_val: curr_px = real_w_val / orig_w
-                st.session_state['pixel_size_map'][file.name] = curr_px 
-                
-                img_area_mm2 = ((orig_w * orig_h) * (curr_px ** 2)) / 1_000_000.0
-                
-                df_img = calculate_qwa_metrics(temp_path, orig_w, orig_h, curr_px)
-                
-                if df_img is not None and not df_img.empty:
-                    df_img.insert(0, 'Arquivo', file.name)
-                    df_img['Img_Area_mm2'] = img_area_mm2 
-                    st.session_state['results_raw'].append(df_img)
+        with st.spinner("Processando..."):
+            adapter, erro = load_onnx_model(onnx_path)
+            if not adapter: 
+                st.error(erro)
+                st.stop()
+            
+            bar = st.progress(0)
+            for i, file in enumerate(uploaded_files):
+                try:
+                    img_pil = Image.open(file).convert("RGB")
+                    orig_w, orig_h = img_pil.size
                     
-                    if save_masks:
-                        shutil.copy(temp_path, os.path.join(final_out_dir, "masks", f"mask_{os.path.splitext(file.name)[0]}.png"))
-            
-            except Exception as e:
-                st.error(f"Erro em {file.name}: {e}")
-            bar.progress((i+1)/len(uploaded_files))
-            
-    st.success("Processamento Concluído!")
+                    # Cálculo do fator de escala e min_area dinâmico
+                    fator_escala = calculate_area_scale_factor(orig_w, orig_h)
+                    min_area_scaled = int(round((1/fator_escala) * min_area_obj))
+                    
+                    # Processador atualizado (Post-processing com regionprops)
+                    post_proc = MaskPostProcessor(threshold=THRESHOLD_FIXO, min_area=min_area_scaled)
+                    
+                    mask_array = run_inference(adapter, img_pil, post_proc, min_area=min_area_scaled)
+                    
+                    temp_path = os.path.join(TEMP_DIR, f"temp_{file.name}.png")
+                    Image.fromarray(mask_array).save(temp_path)
+                    
+                    df_img = calculate_qwa_metrics(temp_path, orig_w, orig_h, pixel_size_val)
+                    
+                    if df_img is not None and not df_img.empty:
+                        df_img.insert(0, 'Arquivo', file.name)
+                        df_img['Img_Area_mm2'] = ((orig_w * orig_h) * (pixel_size_val ** 2)) / 1_000_000.0
+                        st.session_state['results_raw'].append(df_img)
+                        st.session_state['pixel_size_map'][file.name] = pixel_size_val
+                except Exception as e:
+                    st.error(f"Erro em {file.name}: {e}")
+                bar.progress((i+1)/len(uploaded_files))
+        
+        st.session_state['processado'] = True
+        st.success("Processamento Concluído!")
+        st.rerun() # Força a atualização para mostrar os resultados
 
 # --- EXIBIÇÃO DOS RESULTADOS ---
-if st.session_state['results_raw']:
-    
-    # 1. RECALCULAR RESUMOS
+if st.session_state['processado']:
     summary_list = []
-    
     for df_raw in st.session_state['results_raw']:
         df_filtered = filtrar_vasos(df_raw, ignorar_bordas)
-        filename = df_raw['Arquivo'].iloc[0]
-        img_area_mm2 = df_raw['Img_Area_mm2'].iloc[0]
-        stats = calcular_resumo_imagem(df_filtered, filename, img_area_mm2)
-        if stats: summary_list.append(stats)
-        
-    df_summary = pd.DataFrame(summary_list)
+        if not df_filtered.empty:
+            filename = df_raw['Arquivo'].iloc[0]
+            area_mm2 = df_raw['Img_Area_mm2'].iloc[0]
+            stats = calcular_resumo_imagem(df_filtered, filename, area_mm2)
+            if stats: summary_list.append(stats)
     
-    # --- RESUMO GLOBAL ---
-    cols = ["Arquivo", "Nº Vasos", "Freq. (v/mm²)", "Média do Ø Maior (µm)", "Ø Maior Std", "Área Média (µm²)", "Porosidade (%)"]
-    final_cols = [c for c in cols if c in df_summary.columns]
-    df_base = df_summary[final_cols]
-    
-    df_sum, df_mean = calcular_linhas_resumo(df_base, label_col_name="Arquivo")
-    df_final = pd.concat([df_base, df_sum, df_mean], ignore_index=True)
-    
-    st.subheader("📋 Resumo Global")
-    if ignorar_bordas:
-        st.caption("⚠️ Exibindo apenas vasos inteiros. Vasos cortados pela borda foram excluídos.")
+    # VERIFICAÇÃO DE VASOS ENCONTRADOS
+    if not summary_list:
+        st.warning("⚠️ **Nenhum vaso foi detectado nas imagens processadas.**")
+        st.info("""
+            **Sugestões para ajuste:**
+            1. **Revise a Imagem:** Verifique se a qualidade ou o contraste da captura original permite a identificação dos vasos.
+            2. **Ajuste o Filtro:** A 'Área Mínima (µm²)' pode estar muito alta, excluindo todos os vasos detectados.
+            3. **Troque o Modelo:** O modelo de IA selecionado pode não ser o mais adequado para este tipo específico de madeira.
+        """)
     else:
-        st.caption("ℹ️ Exibindo todos os vasos (incluindo bordas).")
-
-    height_global = 600 if len(df_final) > 25 else "content"
-
-    # CORREÇÃO DARK MODE: Adicionado 'color: #000000' para forçar texto preto
-    st.dataframe(
-        df_final.style.format(precision=2, na_rep="-").apply(
-             lambda x: ['background-color: #e6e9ef; color: #000000' if x['Arquivo'] in ['TOTAL', 'MÉDIA'] else '' for i in x], axis=1),
-        width="stretch", 
-        hide_index=True,
-        height=height_global
-    )
-    
-    # DOWNLOADS
-    final_out_dir = os.path.join(root_dir, output_dir_name)
-    if not os.path.exists(final_out_dir): os.makedirs(final_out_dir)
-    
-    csv_sum = os.path.join(final_out_dir, "resumo_anatomico.csv")
-    df_summary.to_csv(csv_sum, sep=';', encoding='utf-8-sig', index=False)
-    
-    df_all_raw = pd.concat(st.session_state['results_raw'], ignore_index=True)
-    if "Imagem" in df_all_raw.columns:
-        df_all_raw.drop(columns=["Imagem"], inplace=True)
+        # TUDO O QUE DEPENDE DE DADOS FICA DENTRO DESTE ELSE
+        df_summary = pd.DataFrame(summary_list)
         
-    csv_raw = os.path.join(final_out_dir, "dados_brutos_vasos.csv")
-    df_all_raw.to_csv(csv_raw, sep=';', encoding='utf-8-sig', index=False)
+        # --- RESUMO GLOBAL ---
+        cols = ["Arquivo", "Nº Vasos", "Freq. (v/mm²)", "Média do Ø Maior (µm)", "Ø Maior Std", "Área Média (µm²)", "Porosidade (%)"]
+        final_cols = [c for c in cols if c in df_summary.columns]
+        df_base = df_summary[final_cols]
+        
+        df_sum, df_mean = calcular_linhas_resumo(df_base, label_col_name="Arquivo")
+        
+        # Filtra DataFrames para evitar o FutureWarning do Pandas 2.x
+        dfs_to_concat = [
+            d.dropna(axis=1, how='all') for d in [df_base, df_sum, df_mean] 
+            if not d.empty and not d.isna().all().all()
+        ]
+        
+        if dfs_to_concat:
+            df_final = pd.concat(dfs_to_concat, ignore_index=True).convert_dtypes()
+        else:
+            df_final = df_base.copy()
+        
+        st.subheader("📋 Resumo Global")
+        if ignorar_bordas:
+            st.caption("⚠️ Exibindo apenas vasos inteiros. Vasos cortados pela borda foram excluídos.")
+        else:
+            st.caption("ℹ️ Exibindo todos os vasos (incluindo bordas).")
 
-    c_dl1, c_spacer, c_dl2 = st.columns([2, 4, 2])
-    with c_dl1:
-        with open(csv_sum, "rb") as f: 
-            st.download_button("📥 Baixar Resumo (CSV)", f, "resumo_anatomico.csv", width="stretch")
-    with c_dl2:
-        with open(csv_raw, "rb") as f: 
-            st.download_button("📥 Dados Brutos (Completo)", f, "dados_brutos_vasos.csv", width="stretch")
+        height_global = 600 if len(df_final) > 25 else "content"
 
-    st.divider()
-
-    # 2. VISUALIZADOR INTERATIVO
-    st.header("🔍 Visualização & Detalhes")
-    
-    arquivos_disponiveis = df_summary['Arquivo'].tolist()
-    selected_file = st.selectbox("Selecione uma imagem para detalhar:", options=arquivos_disponiveis)
-    
-    if selected_file:
-        exibir_visualizacao = st.checkbox("📸 Exibir Imagem e Máscara (Segmentação)", value=False)
-        
-        df_raw_total = pd.concat(st.session_state['results_raw'], ignore_index=True)
-        df_file_full = df_raw_total[df_raw_total['Arquivo'] == selected_file]
-        df_file_filtered = filtrar_vasos(df_file_full, ignorar_bordas)
-        
-        if exibir_visualizacao:
-            col_vis1, col_vis2 = st.columns(2)
-            
-            uploaded_file_ref = st.session_state['uploaded_files_map'].get(selected_file)
-            pixel_size_used = st.session_state['pixel_size_map'].get(selected_file, 1.0)
-            temp_mask_path = os.path.join(TEMP_DIR, f"temp_{selected_file}.png")
-            
-            if uploaded_file_ref and os.path.exists(temp_mask_path):
-                img_original = Image.open(uploaded_file_ref).convert("RGB")
-                orig_w_ref, _ = img_original.size
-                
-                with col_vis1:
-                    st.image(img_original, caption=f"Original: {selected_file}", width="stretch")
-                
-                mask_gray = cv2.imread(temp_mask_path, cv2.IMREAD_GRAYSCALE)
-                mask_viz = desenhar_grid_quadrantes(
-                    mask_gray, 
-                    pixel_size_used, 
-                    original_w=orig_w_ref, 
-                    df_vessels=df_file_filtered
-                )
-                
-                with col_vis2:
-                    st.image(mask_viz, caption="Segmentação + Quadrantes (1mm²)", width="stretch")
-            else:
-                st.warning("Arquivos temporários não encontrados. Recalcule se necessário.")
-
-        st.subheader(f"📊 Estatísticas por Quadrante: {selected_file}")
-        
-        img_area_mm2_saved = df_file_full['Img_Area_mm2'].iloc[0]
-        df_q = agrupar_por_quadrante(df_file_filtered, img_area_mm2_saved)
-        
-        height_table = 600 if len(df_q) > 25 else "content"
-        
-        # CORREÇÃO DARK MODE: Adicionado 'color: #000000' para forçar texto preto
         st.dataframe(
-            df_q.style.format(precision=2, na_rep="-").apply(
-                lambda x: ['background-color: #e6e9ef; color: #292933' if x['Quadrante'] in ['TOTAL', 'MÉDIA'] else '' for i in x], axis=1),
+            df_final.style.format(precision=2, na_rep="-").apply(
+                lambda x: ['background-color: #e6e9ef; color: #000000' if x['Arquivo'] in ['TOTAL', 'MÉDIA'] else '' for i in x], axis=1),
             width="stretch", 
             hide_index=True,
-            height=height_table
+            height=height_global
         )
-        st.caption(f"Filtro aplicado: {'Apenas Vasos Inteiros' if ignorar_bordas else 'Todos os Vasos'}")
+        
+        # --- DOWNLOADS ---
+        final_out_dir = os.path.join(root_dir, output_dir_name)
+        if not os.path.exists(final_out_dir): os.makedirs(final_out_dir)
+        
+        csv_sum = os.path.join(final_out_dir, "resumo_anatomico.csv")
+        df_summary.to_csv(csv_sum, sep=';', encoding='utf-8-sig', index=False)
+        
+        df_all_raw = pd.concat(st.session_state['results_raw'], ignore_index=True)
+        if "Imagem" in df_all_raw.columns:
+            df_all_raw.drop(columns=["Imagem"], inplace=True)
+            
+        csv_raw = os.path.join(final_out_dir, "dados_brutos_vasos.csv")
+        df_all_raw.to_csv(csv_raw, sep=';', encoding='utf-8-sig', index=False)
+
+        c_dl1, c_spacer, c_dl2 = st.columns([2, 4, 2])
+        with c_dl1:
+            with open(csv_sum, "rb") as f: 
+                st.download_button("📥 Baixar Resumo (CSV)", f, "resumo_anatomico.csv", width="stretch")
+        with c_dl2:
+            with open(csv_raw, "rb") as f: 
+                st.download_button("📥 Dados Brutos (Completo)", f, "dados_brutos_vasos.csv", width="stretch")
+
+        st.divider()
+
+        # --- 2. VISUALIZADOR INTERATIVO ---
+        st.header("🔍 Visualização & Detalhes")
+        
+        arquivos_disponiveis = df_summary['Arquivo'].tolist()
+        selected_file = st.selectbox("Selecione uma imagem para detalhar:", options=arquivos_disponiveis)
+        
+        if selected_file:
+            exibir_visualizacao = st.checkbox("📸 Exibir Imagem e Máscara (Segmentação)", value=False)
+            
+            df_raw_total = pd.concat(st.session_state['results_raw'], ignore_index=True)
+            df_file_full = df_raw_total[df_raw_total['Arquivo'] == selected_file]
+            df_file_filtered = filtrar_vasos(df_file_full, ignorar_bordas)
+            
+            if exibir_visualizacao:
+                col_vis1, col_vis2 = st.columns(2)
+                
+                uploaded_file_ref = st.session_state['uploaded_files_map'].get(selected_file)
+                pixel_size_used = st.session_state['pixel_size_map'].get(selected_file, pixel_size_val)
+                temp_mask_path = os.path.join(TEMP_DIR, f"temp_{selected_file}.png")
+                
+                if uploaded_file_ref and os.path.exists(temp_mask_path):
+                    img_original = Image.open(uploaded_file_ref).convert("RGB")
+                    orig_w_ref, _ = img_original.size
+                    
+                    with col_vis1:
+                        st.image(img_original, caption=f"Original: {selected_file}", width="stretch")
+                    
+                    mask_gray = cv2.imread(temp_mask_path, cv2.IMREAD_GRAYSCALE)
+                    mask_viz = desenhar_grid_quadrantes(
+                        mask_gray, 
+                        pixel_size_used, 
+                        original_w=orig_w_ref, 
+                        df_vessels=df_file_filtered
+                    )
+                    
+                    with col_vis2:
+                        st.image(mask_viz, caption="Segmentação + Quadrantes (1mm²)", width="stretch")
+
+            st.subheader(f"📊 Estatísticas por Quadrante: {selected_file}")
+            
+            img_area_mm2_saved = df_file_full['Img_Area_mm2'].iloc[0]
+            df_q = agrupar_por_quadrante(df_file_filtered, img_area_mm2_saved)
+            
+            st.dataframe(
+                df_q.style.format(precision=2, na_rep="-").apply(
+                    lambda x: ['background-color: #e6e9ef; color: #292933' if x['Quadrante'] in ['TOTAL', 'MÉDIA'] else '' for i in x], axis=1),
+                width="stretch", 
+                hide_index=True
+            )
 
 elif uploaded_files:
     st.info("Clique em 'Gerar Relatório' para iniciar.")

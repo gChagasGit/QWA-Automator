@@ -47,7 +47,7 @@ def preprocess_image(pil_image, target_size=INPUT_SIZE):
     # 4. Adiciona dimensão de batch (1, C, H, W)
     return np.expand_dims(img_np, axis=0)
 
-def run_inference(adapter, pil_image, post_processor=None, threshold=0.5):
+def run_inference(adapter, pil_image, post_processor=None, min_area=100, threshold=0.5):
     """
     Pipeline unificado de inferência para segmentação de vasos.
     """
@@ -62,7 +62,7 @@ def run_inference(adapter, pil_image, post_processor=None, threshold=0.5):
     
     # Pós-processamento (Morfologia e Watershed)
     if post_processor:
-        mask_final = post_processor.process(prob_map_2d)
+        mask_final = post_processor.process(prob_map_2d, min_area=min_area)
     else:
         # Fallback de binarização simples
         mask_final = (prob_map_2d > threshold).astype(np.uint8) * 255
