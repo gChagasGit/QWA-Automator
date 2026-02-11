@@ -1,0 +1,28 @@
+paths:
+  input: "data/input_images_iw"   # Caminho DENTRO do container
+  output: "data/output_results" # Caminho DENTRO do container
+
+parameters:
+  resolution_um_px: 1.0638
+  min_area_px: 3000
+  threshold: 0.5
+  ignore_border: false
+  save_masks: true 
+
+#===================================================================
+
+# Escolha qual modelo carregar: 'vessel' ou 'insidewood'
+active_model: "insidewood"
+
+models:
+  vessel:
+    path: "model/wood_vessel_segmenter.onnx"
+    mean: [0.7599, 0.2988, 0.2935]
+    std: [0.1335, 0.2212, 0.1162]
+    input_size: [1024, 768]
+
+  insidewood:
+    path: "model/insidewood_segmenter.onnx"
+    mean: [0.6187, 0.5177, 0.5508]
+    std: [0.2334, 0.2704, 0.2530]
+    input_size: [640, 640]

@@ -30,11 +30,10 @@ def filtrar_vasos(df, apenas_inside):
         return df[df['Inside'] == True]
     return df
 
-def calcular_resumo_imagem(df_vessels, filename, img_area_mm2):
+def calcular_resumo_imagem(df_vessels, filename, img_area_mm2, img_total_px=(640*640)):
     if df_vessels is None or df_vessels.empty: return None
     n = len(df_vessels)
-    # Área total da imagem em pixels (fixo 1024x768 ou dinâmico se necessário)
-    img_total_px = 1024 * 768 
+    
     porosidade = (df_vessels['Area_px'].sum() / img_total_px) * 100
     
     return {
@@ -50,7 +49,7 @@ def calcular_resumo_imagem(df_vessels, filename, img_area_mm2):
         "Porosidade (%)": porosidade
     }
 
-def carregar_modelo_onnx(onnx_path):
+def carregar_modelo_onnx(onnx_path, mean, std, input_size):
     """
     Inicializa o adaptador ONNX.
     O próprio adaptador gerencia Providers (CPU/OpenVINO/CUDA) internamente.
@@ -60,7 +59,7 @@ def carregar_modelo_onnx(onnx_path):
         sys.exit(1)
         
     try:
-        adapter = ONNXModelAdapter(onnx_path)
+        adapter = ONNXModelAdapter(onnx_path, mean, std, input_size)
         return adapter
     except Exception as e:
         print(f"❌ Erro fatal ao carregar modelo ONNX: {e}")
@@ -109,15 +108,21 @@ def main():
 
     # Extrair variáveis do YAML
     try:
+        
         input_dir = cfg['paths']['input']
         output_dir = cfg['paths']['output']
-        onnx_path = cfg['paths']['onnx_model']
-
+        
         resolution = cfg['parameters'].get('resolution_um_px', 1.0638)
         min_area_um = cfg['parameters'].get('min_area_um', 1000)
         threshold = cfg['parameters'].get('threshold', 0.5)
         ignore_border = cfg['parameters'].get('ignore_border', False)
         save_masks = cfg['parameters'].get('save_masks', False)
+    
+        # ============================================================
+        
+        active_model_name = cfg.get('active_model', 'vessel')
+        m_cfg = cfg['models'][active_model_name]
+        
     except KeyError as e:
         print(f"❌ Campo obrigatório faltando no YAML: {e}")
         sys.exit(1)
@@ -125,9 +130,17 @@ def main():
     # Cálculo do min_area_obj em pixels para o MaskPostProcessor.
     min_area_obj = int(round(min_area_um / (resolution ** 2)))
 
+    # Cálculo do total em pixels das máscara que o modelo gera.
+    img_total_px=(m_cfg['input_size'][0] * m_cfg['input_size'][1])
+    
     # 2. Inicializar Modelo
-    print("🚀 Carregando modelo ONNX...")
-    adapter = carregar_modelo_onnx(onnx_path)
+    print(f"🚀 Carregando o modelo {m_cfg['path']}")
+    adapter = carregar_modelo_onnx(
+        onnx_path=m_cfg['path'],
+        mean=m_cfg['mean'],
+        std=m_cfg['std'],
+        input_size=m_cfg['input_size']
+    )
     print(f"✅ Modelo carregado. Provider: {adapter.provider}")
 
     # Verificar diretórios
@@ -135,6 +148,7 @@ def main():
         print(f"❌ Diretório de entrada não encontrado: {input_dir}")
         sys.exit(1)
 
+    shutil.rmtree(output_dir)
     os.makedirs(output_dir, exist_ok=True)
     if save_masks:
         os.makedirs(os.path.join(output_dir, "masks"), exist_ok=True)
@@ -169,7 +183,6 @@ def main():
             # Cálculo do fator de escala e min_area dinâmico
             fator_escala = calculate_area_scale_factor(orig_w, orig_h)
             min_area_scaled = int(round((1/fator_escala) * min_area_obj))
-            print(f"   -> {filename}: Fator Escala = {fator_escala:.3f}, Min Area = {min_area_scaled} px")
             
             # Processador atualizado (Post-processing com regionprops)
             post_proc = MaskPostProcessor(threshold=threshold, min_area=min_area_scaled)
@@ -193,13 +206,22 @@ def main():
 
                 # Estatísticas sumarizadas
                 df_filtered = filtrar_vasos(df_img, ignore_border)
-                stats = calcular_resumo_imagem(df_filtered, filename, img_area_mm2)
+                stats = calcular_resumo_imagem(df_filtered, filename, img_area_mm2, img_total_px)
                 if stats: summary_list.append(stats)
 
-                # Salvar máscara final se solicitado
+                # --- Salvamento da Máscara com Redimensionamento ---
                 if save_masks:
                     output_mask_path = os.path.join(output_dir, "masks", f"mask_{os.path.splitext(filename)[0]}.png")
-                    shutil.copy(temp_path, output_mask_path)
+                    
+                    # Em vez de shutil.copy, redimensionamos para a dimensão original
+                    # mask_array contém a saída do post_processing (0 ou 255)
+                    mask_pil = Image.fromarray(mask_array)
+                    
+                    # Redimensiona de volta para (orig_w, orig_h) usando vizinho mais próximo 
+                    # para não criar valores intermediários na binarização
+                    mask_final_resized = mask_pil.resize((orig_w, orig_h), resample=Image.NEAREST)
+                    
+                    mask_final_resized.save(output_mask_path)
 
             # Limpeza do arquivo temporário
             if os.path.exists(temp_path): os.remove(temp_path)

@@ -59,14 +59,17 @@ def filtrar_vasos(df, apenas_inside):
         return df[df['Inside'] == True]
     return df
 
-def calcular_resumo_imagem(df_vessels, filename, img_area_mm2):
+def calcular_resumo_imagem(df_vessels, filename, img_area_mm2, mask_shape):
     if df_vessels is None or df_vessels.empty: return None
     n = len(df_vessels)
-    porosidade = (df_vessels['Area_px'].sum() / (1024 * 768)) * 100
+    # Porosidade baseada na resolução real da máscara de inferência
+    total_pixels = mask_shape[0] * mask_shape[1]
+    porosidade = (df_vessels['Area_px'].sum() / total_pixels) * 100
     return {
-        "Arquivo": filename, "Nº Vasos": n, "Freq. (v/mm²)": n / img_area_mm2,
+        "Arquivo": filename, 
+        "Nº Vasos": n, 
+        "Freq. (v/mm²)": n / img_area_mm2,
         "Média do Ø Maior (µm)": df_vessels['Major_Axis_um'].mean(),
-        "Média do Ø Menor (µm)": df_vessels['Minor_Axis_um'].mean(),
         "Área Média (µm²)": df_vessels['Area_um2'].mean(),
         "Porosidade (%)": porosidade
     }
