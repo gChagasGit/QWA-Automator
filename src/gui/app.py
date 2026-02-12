@@ -1,12 +1,14 @@
+import io
+import os
+import sys
+import cv2
+import yaml
+import shutil
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 from PIL import Image
-import os
-import sys
-import shutil
-import cv2
-import io
 
 # --- 1. CONFIGURAÇÃO DE PATHS ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -15,13 +17,21 @@ sys.path.append(root_dir)
 
 # --- 2. IMPORTS ---
 try:
-    from src.core.inference_onnx import ONNXModelAdapter, run_inference
+    from src.core.inference_onnx import ONNXModel, run_inference
     from src.core.metrics import calculate_qwa_metrics, calculate_area_scale_factor
     from src.core.post_processing import MaskPostProcessor
-    from src.gui.visualization import desenhar_grid_quadrantes
+    from src.gui.visualization import draw_grid
 except ImportError as e:
     st.error(f"Erro Crítico de Importação: {e}")
     st.stop()
+
+# Carrega as configurações dos modelos
+config_path = os.path.join(root_dir, "config.yaml")
+with open(config_path, 'r', encoding='utf-8') as f:
+    config_models = yaml.safe_load(f)
+
+# Lista de nomes de modelos disponíveis
+model_options = list(config_models['models'].keys())
 
 # --- 3. CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="QWA Automator", layout="wide", page_icon="⚡")
@@ -44,32 +54,44 @@ if not os.path.exists(TEMP_DIR): os.makedirs(TEMP_DIR)
 # --- 4. FUNÇÕES DE UTILIDADE ---
 
 @st.cache_resource
-def load_onnx_model(path_model):
-    if not path_model or not os.path.exists(path_model):
-        return None, "Arquivo do modelo não encontrado."
+def load_onnx_model(model_key):
     try:
-        adapter = ONNXModelAdapter(path_model)
+        # Buscamos os dados direto do nosso dicionário de configuração
+        m_info = config_models['models'][model_key]
+        
+        # O caminho do modelo deve ser relativo à raiz do projeto
+        onnx_path = os.path.join(root_dir, m_info['path'])
+        
+        if not onnx_path or not os.path.exists(onnx_path):
+            return None, "Arquivo do modelo não encontrado."
+        
+        adapter = ONNXModel(
+            onnx_path=onnx_path,
+            mean=m_info['mean'],
+            std=m_info['std'],
+            input_size=m_info['input_size']
+        )
         return adapter, None
     except Exception as e:
         return None, f"Erro ao carregar ONNX: {str(e)}"
 
-def filtrar_vasos(df, apenas_inside):
+def filter_border_vessels(df, apenas_inside):
     if df is None or df.empty: return df
     if apenas_inside and 'Inside' in df.columns:
         return df[df['Inside'] == True]
     return df
 
-def calcular_resumo_imagem(df_vessels, filename, img_area_mm2, mask_shape):
+def calcular_resumo_imagem(df_vessels, filename, img_area_mm2, total_pixels):
     if df_vessels is None or df_vessels.empty: return None
     n = len(df_vessels)
-    # Porosidade baseada na resolução real da máscara de inferência
-    total_pixels = mask_shape[0] * mask_shape[1]
+    
     porosidade = (df_vessels['Area_px'].sum() / total_pixels) * 100
     return {
         "Arquivo": filename, 
         "Nº Vasos": n, 
         "Freq. (v/mm²)": n / img_area_mm2,
         "Média do Ø Maior (µm)": df_vessels['Major_Axis_um'].mean(),
+        "Média do Ø Menor (µm)": df_vessels['Minor_Axis_um'].mean(),
         "Área Média (µm²)": df_vessels['Area_um2'].mean(),
         "Porosidade (%)": porosidade
     }
@@ -122,16 +144,30 @@ if uploaded_files:
 # --- 5. SIDEBAR: CONFIGURAÇÕES E ENTRADA ---
 with st.sidebar:
     st.header("⚙️ Calibração")
-    pixel_size_val = st.number_input("Resolução (µm/pixel):", min_value=0.01, value=1.0638, format="%.4f")
-    min_area_um2 = st.number_input("Área Mínima (µm²):", value=1000.0, step=100.0)
+    resolution = st.number_input("Resolução (µm/pixel):", min_value=0.01, value=1.0638, format="%.4f", help="Razão da Área da imagem em micrômetros pela área em pixels.")
+    min_area_um2 = st.number_input("Área Mínima do vaso (µm²):", value=1000.0, step=100.0, help="Vasos com área menor que este valor serão ignorados na análise.")
     
     st.divider()
     st.header("🔍 Segmentação")
-    model_dir = os.path.join(root_dir, "model")
-    models = [f for f in os.listdir(model_dir) if f.endswith('.onnx')]
-    onnx_path = os.path.join(model_dir, st.selectbox("Modelo:", models)) if models else None
-    THRESHOLD_FIXO = st.slider("Confiança:", 0.1, 0.9, 0.5)
-    ignorar_bordas = st.checkbox("Excluir vasos cortados?", value=False)
+    
+    # Seleção do Modelo
+    selected_model_name = st.selectbox(
+        "Selecione o Modelo ONNX",
+        options=model_options,
+        index=model_options.index(config_models.get('active_model', model_options[0]))
+    )
+    
+    # Obtém os parâmetros do modelo selecionado
+    m_cfg = config_models['models'][selected_model_name]
+    
+    # Cálculo do total em pixels das máscara que o modelo gera.
+    img_total_px=(m_cfg['input_size'][0] * m_cfg['input_size'][1])
+    
+    # Exibe informações do modelo (opcional, para transparência científica)
+    st.caption(f"Resolução de treino: {m_cfg['input_size'][0]}x{m_cfg['input_size'][1]}")
+    
+    threshold_model = st.slider("Confiança:", 0.1, 0.9, 0.5)
+    edge_truncated_vessels = st.checkbox("Descartar vasos seccionados pela borda?", value=False)
 
 # --- 6. INICIALIZAÇÃO DE ESTADO ---
 for key in ['results_raw', 'uploaded_files_map', 'pixel_size_map', 'processado']:
@@ -148,7 +184,7 @@ if st.button("🚀 Gerar Relatório", width="stretch", type="primary"):
         st.session_state['uploaded_files_map'] = {} 
         
         with st.spinner("Processando..."):
-            adapter, erro = load_onnx_model(onnx_path)
+            adapter, erro = load_onnx_model(selected_model_name)
             if not adapter: st.error(erro); st.stop()
             
             bar = st.progress(0)
@@ -163,22 +199,23 @@ if st.button("🚀 Gerar Relatório", width="stretch", type="primary"):
                     
                     orig_w, orig_h = img_pil.size
                     
-                    fator_escala = calculate_area_scale_factor(orig_w, orig_h)
-                    min_area_scaled = int(round((1/fator_escala) * (min_area_um2 / (pixel_size_val**2))))
+                    fator_escala = calculate_area_scale_factor(img_pil.size, adapter.input_size)
+                    min_area_scaled = int(round((1/fator_escala) * (min_area_um2 / (resolution**2))))
                     
-                    post_proc = MaskPostProcessor(threshold=THRESHOLD_FIXO, min_area=min_area_scaled)
+                    post_proc = MaskPostProcessor(threshold=threshold_model, min_area=min_area_scaled)
                     mask_array = run_inference(adapter, img_pil, post_proc)
                     
                     temp_path = os.path.join(TEMP_DIR, f"temp_{filename}.png")
                     Image.fromarray(mask_array).save(temp_path)
                     
-                    df_img = calculate_qwa_metrics(temp_path, orig_w, orig_h, pixel_size_val)
+                    df_img = calculate_qwa_metrics(temp_path, img_pil.size, resolution)
+                    
                     if df_img is not None and not df_img.empty:
                         df_img.insert(0, 'Arquivo', filename)
-                        df_img['Img_Area_mm2'] = ((orig_w * orig_h) * (pixel_size_val ** 2)) / 1_000_000.0
+                        df_img['Img_Area_mm2'] = ((orig_w * orig_h) * (resolution ** 2)) / 1_000_000.0
                         st.session_state['results_raw'].append(df_img)
                         st.session_state['uploaded_files_map'][filename] = file
-                        st.session_state['pixel_size_map'][filename] = pixel_size_val
+                        st.session_state['pixel_size_map'][filename] = resolution
                 except Exception as e:
                     st.error(f"Erro em {filename}: {e}")
                 bar.progress((i+1)/len(uploaded_files))
@@ -191,11 +228,11 @@ if st.button("🚀 Gerar Relatório", width="stretch", type="primary"):
 if st.session_state['processado']:
     summary_list = []
     for df_raw in st.session_state['results_raw']:
-        df_filtered = filtrar_vasos(df_raw, ignorar_bordas)
+        df_filtered = filter_border_vessels(df_raw, edge_truncated_vessels)
         if not df_filtered.empty:
             filename = df_raw['Arquivo'].iloc[0]
             area_mm2 = df_raw['Img_Area_mm2'].iloc[0]
-            stats = calcular_resumo_imagem(df_filtered, filename, area_mm2)
+            stats = calcular_resumo_imagem(df_filtered, filename, area_mm2, img_total_px)
             if stats: summary_list.append(stats)
     
     if not summary_list:
@@ -231,7 +268,7 @@ if st.session_state['processado']:
             exibir_visualizacao = st.checkbox("📸 Exibir Imagem e Máscara (Segmentação)", value=False)
             
             df_raw_sel = [d for d in st.session_state['results_raw'] if d['Arquivo'].iloc[0] == selected_file][0]
-            df_filt_sel = filtrar_vasos(df_raw_sel, ignorar_bordas)            
+            df_filt_sel = filter_border_vessels(df_raw_sel, edge_truncated_vessels)            
             
             st.markdown("""
                 <style>
@@ -241,25 +278,25 @@ if st.session_state['processado']:
 
             if exibir_visualizacao:
                 col1, col2 = st.columns(2, gap="large")
-                VIEW_WIDTH = 512 
                 
                 with col1:
                     file_ref = st.session_state['uploaded_files_map'][selected_file]
                     file_ref.seek(0) # Volta para o início do arquivo
                     img_full = Image.open(file_ref).convert("RGB")
-                    aspect = img_full.height / img_full.width
-                    img_resized = img_full.resize((VIEW_WIDTH, int(VIEW_WIDTH * aspect)), resample=Image.LANCZOS)
-                    st.image(img_resized, caption=f"Original: {selected_file}", width="stretch")
+                    st.image(img_full, caption=f"Original: {selected_file}", width="stretch")
                     
                 with col2:
                     mask_path = os.path.join(TEMP_DIR, f"temp_{selected_file}.png")
                     mask_cv = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
-                    mask_viz = desenhar_grid_quadrantes(
-                        mask_cv, st.session_state['pixel_size_map'][selected_file], 
-                        img_full.size[0], df_filt_sel
+
+                    mask_viz = draw_grid(
+                        mask_cv,
+                        img_full.size, 
+                        st.session_state['pixel_size_map'][selected_file], 
+                        df_filt_sel
                     )
-                    mask_resized = cv2.resize(mask_viz, (VIEW_WIDTH, int(VIEW_WIDTH * aspect)), interpolation=cv2.INTER_AREA)
-                    st.image(mask_resized, caption="Segmentação + Quadrantes (1mm²)", width="stretch")
+                    
+                    st.image(mask_viz, caption="Segmentação + Quadrantes (1mm²)", width="stretch")
                     st.caption("**Quadrantes:** :blue[1-Azul] | :green[2-Verde] | :red[3-Vermelho] | :orange[4-Laranja]")
   
             st.subheader("📊 Estatísticas por Quadrante")

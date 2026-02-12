@@ -83,7 +83,7 @@ class MaskPostProcessor:
         return mask_separated
 
     @staticmethod
-    def refine(mask_prob_numpy, shape, threshold=0.5, min_area=100):
+    def refine(mask_prob_numpy, mask_prob_shape, threshold=0.5, min_area=100):
         # 1. Preprocessamento (Binarização + Fill Holes)
         mask_filled = MaskPostProcessor._preprocess_mask(mask_prob_numpy, threshold)
         
@@ -95,9 +95,9 @@ class MaskPostProcessor:
         valid_props = [p for p in props if p.area >= min_area]
         
         # 4. Cálculo do limiar dinâmico para Watershed
-        threshold_split = MaskPostProcessor._calculate_split_threshold(valid_props, shape)
+        threshold_split = MaskPostProcessor._calculate_split_threshold(valid_props, mask_prob_shape)
 
-        mask_final = np.zeros_like(mask_filled)
+        mask_cv = np.zeros_like(mask_filled)
 
         for p in valid_props:
             # Isola o componente atual
@@ -105,24 +105,23 @@ class MaskPostProcessor:
             
             if p.area < threshold_split:
                 # Objeto de tamanho normal
-                mask_final = cv2.bitwise_or(mask_final, component_mask)
+                mask_cv = cv2.bitwise_or(mask_cv, component_mask)
             else:
                 # Objeto grande: precisa de Watershed
                 cnts, _ = cv2.findContours(component_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                 if cnts:
                     separated_object = MaskPostProcessor._apply_watershed_split(cnts[0], mask_filled.shape)
-                    mask_final = cv2.bitwise_or(mask_final, separated_object)
-
-        return mask_final
+                    mask_cv = cv2.bitwise_or(mask_cv, separated_object)
+        return mask_cv
 
     def process(self, mask_prob_numpy):
         """
         Método de instância para ser chamado pelo inference.py.
         """
-    
+        
         return MaskPostProcessor.refine(
             mask_prob_numpy, 
-            mask_prob_numpy.shape, 
+            mask_prob_numpy.shape,
             self.threshold, 
             self.min_area
         )

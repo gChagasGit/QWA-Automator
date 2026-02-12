@@ -3,7 +3,7 @@ from PIL import Image
 import onnxruntime as ort
 from scipy.special import expit
 
-class ONNXModelAdapter:
+class ONNXModel:
     def __init__(self, onnx_path, mean, std, input_size):
         # Lista de provedores por ordem de prioridade
         providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
@@ -43,6 +43,7 @@ def run_inference(adapter, pil_image, post_processor=None):
     """
     Pipeline unificado que utiliza as constantes do adaptador carregado.
     """
+    
     # Pré-processamento usando os dados do adapter
     input_tensor = preprocess_image(
         pil_image, 

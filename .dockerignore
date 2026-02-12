@@ -7,6 +7,8 @@
 **/__pycache__/
 **/*.pyc
 
+config_*
+
 # Pastas Temporárias e de Saída
 temp_masks/
 temp_batch/

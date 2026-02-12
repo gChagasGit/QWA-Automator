@@ -16,7 +16,7 @@ print(f"🔍 Diretório atual: {os.getcwd()}")
 try:
     from src.core.metrics import calculate_qwa_metrics, calculate_area_scale_factor
     # Importa o adaptador ONNX específico
-    from src.core.inference_onnx import ONNXModelAdapter, run_inference
+    from src.core.inference_onnx import ONNXModel, run_inference
     from src.core.post_processing import MaskPostProcessor
     print("✅ Bibliotecas e Módulos ONNX importados com sucesso!")
 except ImportError as e:
@@ -25,16 +25,16 @@ except ImportError as e:
     sys.exit(1)
 
 # --- FUNÇÕES AUXILIARES (Idênticas ao script original) ---
-def filtrar_vasos(df, apenas_inside):
+def filter_border_vessels(df, apenas_inside):
     if apenas_inside and 'Inside' in df.columns:
         return df[df['Inside'] == True]
     return df
 
-def calcular_resumo_imagem(df_vessels, filename, img_area_mm2, img_total_px=(640*640)):
+def calculate_summary_image(df_vessels, filename, img_area_mm2, img_total_px=(640*640)):
     if df_vessels is None or df_vessels.empty: return None
     n = len(df_vessels)
     
-    porosidade = (df_vessels['Area_px'].sum() / img_total_px) * 100
+    porosity = (df_vessels['Area_px'].sum() / img_total_px) * 100
     
     return {
         "Arquivo": filename, 
@@ -46,10 +46,10 @@ def calcular_resumo_imagem(df_vessels, filename, img_area_mm2, img_total_px=(640
         "Ø Menor Std": df_vessels['Minor_Axis_um'].std(),
         "Área Média (µm²)": df_vessels['Area_um2'].mean(),
         "Área Std": df_vessels['Area_um2'].std(),
-        "Porosidade (%)": porosidade
+        "Porosidade (%)": porosity
     }
 
-def carregar_modelo_onnx(onnx_path, mean, std, input_size):
+def load_model_onnx(onnx_path, mean, std, input_size):
     """
     Inicializa o adaptador ONNX.
     O próprio adaptador gerencia Providers (CPU/OpenVINO/CUDA) internamente.
@@ -59,7 +59,7 @@ def carregar_modelo_onnx(onnx_path, mean, std, input_size):
         sys.exit(1)
         
     try:
-        adapter = ONNXModelAdapter(onnx_path, mean, std, input_size)
+        adapter = ONNXModel(onnx_path, mean, std, input_size)
         return adapter
     except Exception as e:
         print(f"❌ Erro fatal ao carregar modelo ONNX: {e}")
@@ -68,16 +68,24 @@ def carregar_modelo_onnx(onnx_path, mean, std, input_size):
 def create_default_config(filename="config_onnx.yaml"):
     """Cria um arquivo de configuração padrão se ele não existir."""
     default_yaml = """paths:
-  input: "input_images"
-  output: "output_results_onnx"
-  onnx_model: "model/model_wood_vessel_segmenter.onnx"  # Ajuste para o nome real do seu modelo
+  input: "input_images"  # Coloque suas imagens aqui. Exemplo: "data/input_images"
+  output: "output_results" # Resultados serão salvos aqui. Exemplo: "data/output_results"
 
 parameters:
   resolution_um_px: 1.0638  # Resolução em micrometros por pixel
-  min_area_px: 100          # Área mínima para considerar um vaso
+  min_area_px: 1000          # Área mínima para considerar um vaso
   threshold: 0.5            # Confiança da IA (IoU threshold ou Score)
   ignore_border: false      # Se true, ignora vasos cortados na borda
   save_masks: true          # Salvar as máscaras geradas?
+
+active_model: "InsideWood-IW" # Nome do modelo a ser carregado (deve existir na seção models)
+
+models:
+  InsideWood-IW:    # Modelo de Segmentação selecionado em active_model
+    path: "model/insidewood_segmenter.onnx" # Caminho para o modelo ONNX
+    mean: [0.6187, 0.5177, 0.5508] # Média de normalização (RGB) do modelo
+    std: [0.2334, 0.2704, 0.2530]  # Desvio padrão de normalização (RGB) do modelo
+    input_size: [640, 640] # Tamanho de entrada esperado pelo modelo (W, H)
 """
     try:
         with open(filename, "w") as f:
@@ -114,7 +122,7 @@ def main():
         
         resolution = cfg['parameters'].get('resolution_um_px', 1.0638)
         min_area_um = cfg['parameters'].get('min_area_um', 1000)
-        threshold = cfg['parameters'].get('threshold', 0.5)
+        threshold_model = cfg['parameters'].get('threshold', 0.5)
         ignore_border = cfg['parameters'].get('ignore_border', False)
         save_masks = cfg['parameters'].get('save_masks', False)
     
@@ -135,7 +143,7 @@ def main():
     
     # 2. Inicializar Modelo
     print(f"🚀 Carregando o modelo {m_cfg['path']}")
-    adapter = carregar_modelo_onnx(
+    adapter = load_model_onnx(
         onnx_path=m_cfg['path'],
         mean=m_cfg['mean'],
         std=m_cfg['std'],
@@ -148,8 +156,10 @@ def main():
         print(f"❌ Diretório de entrada não encontrado: {input_dir}")
         sys.exit(1)
 
-    shutil.rmtree(output_dir)
-    os.makedirs(output_dir, exist_ok=True)
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)
+        os.makedirs(output_dir, exist_ok=True)
+        
     if save_masks:
         os.makedirs(os.path.join(output_dir, "masks"), exist_ok=True)
 
@@ -181,11 +191,11 @@ def main():
             orig_w, orig_h = img_pil.size
 
             # Cálculo do fator de escala e min_area dinâmico
-            fator_escala = calculate_area_scale_factor(orig_w, orig_h)
+            fator_escala = calculate_area_scale_factor(img_pil.size, adapter.input_size)
             min_area_scaled = int(round((1/fator_escala) * min_area_obj))
             
             # Processador atualizado (Post-processing com regionprops)
-            post_proc = MaskPostProcessor(threshold=threshold, min_area=min_area_scaled)
+            post_proc = MaskPostProcessor(threshold=threshold_model, min_area=min_area_scaled)
             
             mask_array = run_inference(adapter, img_pil, post_proc)
 
@@ -197,7 +207,7 @@ def main():
             img_area_mm2 = ((orig_w * orig_h) * (resolution ** 2)) / 1_000_000.0
             
             # Chama a função de métricas do core
-            df_img = calculate_qwa_metrics(temp_path, orig_w, orig_h, resolution)
+            df_img = calculate_qwa_metrics(temp_path, img_pil.size, resolution)
 
             if df_img is not None and not df_img.empty:
                 df_img.insert(0, 'Arquivo', filename)
@@ -205,8 +215,8 @@ def main():
                 results_raw.append(df_img)
 
                 # Estatísticas sumarizadas
-                df_filtered = filtrar_vasos(df_img, ignore_border)
-                stats = calcular_resumo_imagem(df_filtered, filename, img_area_mm2, img_total_px)
+                df_filtered = filter_border_vessels(df_img, ignore_border)
+                stats = calculate_summary_image(df_filtered, filename, img_area_mm2, img_total_px)
                 if stats: summary_list.append(stats)
 
                 # --- Salvamento da Máscara com Redimensionamento ---
@@ -228,7 +238,6 @@ def main():
 
         except Exception as e:
             tqdm.write(f"⚠️ Erro em {filename}: {e}")
-            # print(e) # Descomente para debug detalhado
 
     # 4. Salvar Resultados Finais
     print("\n💾 Salvando planilhas...")

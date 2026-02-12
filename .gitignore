@@ -4,3 +4,5 @@
 **/*.pyc
 
 data/
+
+config_*
