@@ -2,26 +2,39 @@ name: Sync to Hugging Face Hub
 
 on:
   push:
-    branches: [main] # O robô liga quando você dá push na branch main
-
-  # Permite rodar manualmente clicando num botão se precisar
+    branches: [main]
   workflow_dispatch:
 
 jobs:
   sync-to-hub:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          lfs: true # IMPORTANTE: Garante que os modelos .pt sejam copiados
+          lfs: true
 
-      - name: Push to hub
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install huggingface_hub
+
+      - name: Push to Hugging Face via API
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }} # Pega a senha do cofre do GitHub
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          git config --global user.email "chagasgustavo10@gmail.com"
-          git config --global user.name "gChagasGit"
-          git remote add space https://gchagas:$HF_TOKEN@huggingface.co/spaces/gchagas/QWA-Automator-beta
-          git push --force space main
-
+          python -c "
+          from huggingface_hub import HfApi
+          api = HfApi()
+          api.upload_folder(
+              folder_path='.',
+              repo_id='gchagas/QWA-Automator-beta',
+              repo_type='space',
+              token='${{ secrets.HF_TOKEN }}',
+              delete_patterns=['*.pyc', '__pycache__']
+          )
+          "
